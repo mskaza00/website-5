@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Events | ShotsBySkaza</title>
+<meta name="description" content="Event photography by Matthew Skaza — ShotsBySkaza.">
+
+<link rel="icon" type="image/png" href="shotsbyskazalogo.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="grain"></div>
+
+<header class="site-header">
+<div class="header-inner">
+
+<a class="logo" href="index.html">
+<img src="shotsbyskazalogo.png" alt="ShotsBySkaza logo">
+<span>ShotsBySkaza</span>
+</a>
+
+<nav>
+<ul class="site-nav" id="siteNav">
+<li><a href="index.html">Home</a></li>
+<li class="dropdown">
+<button class="dropdown-trigger" type="button" aria-haspopup="true" aria-expanded="false">Portfolios <span class="caret">▾</span></button>
+<div class="dropdown-menu">
+<a href="portraits.html">Portraits</a>
+<a href="events.html" aria-current="page">Events</a>
+<a href="sports.html">Sports</a>
+</div>
+</li>
+<li><a href="gallery.html">Client Galleries</a></li>
+<li><a href="index.html#about">About</a></li>
+<li class="mobile-only-contact"><a href="mailto:mskaza.business@gmail.com">Contact</a></li>
+</ul>
+</nav>
+
+<div class="header-actions">
+<a class="icon-link" href="https://instagram.com/shotsbyskaza" target="_blank" rel="noopener" aria-label="ShotsBySkaza on Instagram">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.7" r="1.1" fill="currentColor" stroke="none"/></svg>
+</a>
+<a class="btn-contact" href="mailto:mskaza.business@gmail.com">Contact</a>
+<button class="nav-toggle" id="navToggle" aria-label="Toggle menu" aria-expanded="false">
+<span></span><span></span><span></span>
+</button>
+</div>
+
+</div>
+</header>
+
+<main>
+
+<section class="page-head wrap">
+<p class="eyebrow">Portfolio</p>
+<h1>Events</h1>
+<p>Coverage from community events, ceremonies, and everything in between.</p>
+</section>
+
+<section class="wrap">
+<div id="events-gallery" class="masonry is-loading"></div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+<a class="email" href="mailto:mskaza.business@gmail.com">mskaza.business@gmail.com</a>
+<p class="copyright">© Matthew Skaza 2026</p>
+</footer>
+
+<div class="lightbox" id="lightbox" aria-hidden="true">
+<button class="lightbox-close" id="lightboxClose" aria-label="Close">✕</button>
+<button class="lightbox-prev" id="lightboxPrev" aria-label="Previous photo">‹</button>
+<button class="lightbox-next" id="lightboxNext" aria-label="Next photo">›</button>
+<figure class="lightbox-figure">
+<img id="lightboxImg" src="" alt="">
+<figcaption class="lightbox-caption" id="lightboxCaption"></figcaption>
+</figure>
+</div>
+
+<script src="js/main.js"></script>
+<script src="js/gallery-loader.js"></script>
+<script>
+sbsLoadGallery("events-gallery", "photos/events", "Event");
+</script>
+
+</body>
+</html>
