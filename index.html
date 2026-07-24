@@ -3,30 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
 <title>ShotsBySkaza | Sports, Portrait &amp; Event Photography</title>
 <meta name="description" content="ShotsBySkaza — sports, portrait, and event photography by Matthew Skaza, based in Western Massachusetts.">
-
 <link rel="icon" type="image/png" href="shotsbyskazalogo.png">
-
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-
 <div class="grain"></div>
-
 <header class="site-header">
 <div class="header-inner">
-
 <a class="logo" href="index.html">
 <img src="shotsbyskazalogo.png" alt="ShotsBySkaza logo">
 <span>ShotsBySkaza</span>
 </a>
-
 <nav>
 <ul class="site-nav" id="siteNav">
 <li><a href="index.html" aria-current="page">Home</a></li>
@@ -43,7 +35,6 @@
 <li class="mobile-only-contact"><a href="mailto:mskaza.business@gmail.com">Contact</a></li>
 </ul>
 </nav>
-
 <div class="header-actions">
 <a class="icon-link" href="https://instagram.com/shotsbyskaza" target="_blank" rel="noopener" aria-label="ShotsBySkaza on Instagram">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.7" r="1.1" fill="currentColor" stroke="none"/></svg>
@@ -53,37 +44,14 @@
 <span></span><span></span><span></span>
 </button>
 </div>
-
 </div>
 </header>
-
 <main>
-
-<section class="hero wrap">
-<div class="hero-inner">
-<p class="hero-eyebrow">ShotsBySkaza — Photography</p>
-<h1>Between the<br>whistle&nbsp;&amp;&nbsp;the <em>shot.</em></h1>
-<p class="hero-sub">Sports, portrait, and event photography from Western Massachusetts — shot by Matthew Skaza.</p>
-<div class="hero-tags">
-<span>Sports</span>
-<span>Portraits</span>
-<span>Events</span>
-<span>Western Mass</span>
-</div>
-</div>
-<div class="scroll-cue"><span class="line"></span> Scroll</div>
-</section>
-
 <section id="portfolio">
-<div class="wrap section-head">
-<p class="eyebrow">Portfolio</p>
-<h2>The Work</h2>
-</div>
 <div class="wrap">
 <div id="combined-gallery" class="masonry is-loading"></div>
 </div>
 </section>
-
 <section id="about" class="wrap about">
 <div>
 <p class="eyebrow">About</p>
@@ -94,14 +62,11 @@
 <p>As a student-athlete and football captain, I bring an athlete's perspective into sports photography by understanding the emotion, preparation, and intensity behind every moment.</p>
 </div>
 </section>
-
 </main>
-
 <footer class="site-footer">
 <a class="email" href="mailto:mskaza.business@gmail.com">mskaza.business@gmail.com</a>
 <p class="copyright">© Matthew Skaza 2026</p>
 </footer>
-
 <div class="lightbox" id="lightbox" aria-hidden="true">
 <button class="lightbox-close" id="lightboxClose" aria-label="Close">✕</button>
 <button class="lightbox-prev" id="lightboxPrev" aria-label="Previous photo">‹</button>
@@ -111,16 +76,14 @@
 <figcaption class="lightbox-caption" id="lightboxCaption"></figcaption>
 </figure>
 </div>
-
 <script src="js/main.js"></script>
 <script src="js/gallery-loader.js"></script>
 <script>
 sbsLoadCombinedGallery("combined-gallery", [
-  { path: "photos/sports", label: "Sports" },
-  { path: "photos/portraits", label: "Portraits" },
-  { path: "photos/events", label: "Events" }
+{ path: "photos/sports", label: "Sports" },
+{ path: "photos/portraits", label: "Portraits" },
+{ path: "photos/events", label: "Events" }
 ]);
 </script>
-
 </body>
 </html>
