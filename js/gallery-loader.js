@@ -71,25 +71,6 @@ async function sbsFetchFolder(path) {
   return list;
 }
 
-// Grid row height + gap must match .masonry's grid-auto-rows / gap in style.css.
-const SBS_GRID_ROW_PX = 6;
-const SBS_GRID_GAP_PX = 6;
-
-function sbsFitCardSpan(card, img) {
-  function apply() {
-    const width = card.getBoundingClientRect().width;
-    if (!width || !img.naturalWidth || !img.naturalHeight) return;
-    const scaledHeight = (img.naturalHeight / img.naturalWidth) * width;
-    const span = Math.max(1, Math.round((scaledHeight + SBS_GRID_GAP_PX) / (SBS_GRID_ROW_PX + SBS_GRID_GAP_PX)));
-    card.style.gridRowEnd = `span ${span}`;
-  }
-
-  if (img.complete && img.naturalWidth) apply();
-  else img.addEventListener("load", apply, { once: true });
-
-  window.addEventListener("resize", apply);
-}
-
 function sbsRenderPhotoCard(entry, label) {
   const card = document.createElement("a");
   card.href = entry.download_url;
@@ -104,7 +85,6 @@ function sbsRenderPhotoCard(entry, label) {
   img.alt = label ? `${label} photo by Shots By Skaza` : "Photo by Shots By Skaza";
   img.loading = "lazy";
   card.appendChild(img);
-  sbsFitCardSpan(card, img);
 
   const a = document.createElement("span");
   a.className = "corner-a";
