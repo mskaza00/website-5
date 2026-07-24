@@ -21,7 +21,7 @@
    ============================================================= */
 
 const SBS_REPO_OWNER = "mskaza00";
-const SBS_REPO_NAME = "website-4-";
+const SBS_REPO_NAME = "website-5";
 
 const SBS_IMAGE_EXT = /\.(jpe?g|png|webp|gif|avif)$/i;
 
