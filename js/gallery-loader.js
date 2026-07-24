@@ -96,6 +96,54 @@ function sbsRenderPhotoCard(entry, label) {
   return card;
 }
 
+/* Homepage exclude list — a plain-text file in the repo root. Filenames
+   listed there are skipped from the homepage combined feed only; they
+   still show up normally on their own category page. */
+let SBS_EXCLUDE_CACHE = null;
+
+async function sbsLoadExcludeList() {
+  if (SBS_EXCLUDE_CACHE) return SBS_EXCLUDE_CACHE;
+
+  const cacheKey = "sbs-cache:homepage-exclude.txt";
+  try {
+    const cached = sessionStorage.getItem(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && typeof parsed.t === "number" && Date.now() - parsed.t < SBS_CACHE_TTL_MS) {
+        SBS_EXCLUDE_CACHE = new Set(parsed.data);
+        return SBS_EXCLUDE_CACHE;
+      }
+    }
+  } catch (e) {
+    /* skip cache on error */
+  }
+
+  try {
+    const url = `https://raw.githubusercontent.com/${SBS_REPO_OWNER}/${SBS_REPO_NAME}/main/homepage-exclude.txt`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      SBS_EXCLUDE_CACHE = new Set();
+      return SBS_EXCLUDE_CACHE;
+    }
+    const text = await res.text();
+    const names = text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+
+    SBS_EXCLUDE_CACHE = new Set(names);
+    try {
+      sessionStorage.setItem(cacheKey, JSON.stringify({ t: Date.now(), data: names }));
+    } catch (e) {
+      /* skip cache on error */
+    }
+  } catch (e) {
+    SBS_EXCLUDE_CACHE = new Set();
+  }
+
+  return SBS_EXCLUDE_CACHE;
+}
+
 function sbsFinishContainer(container) {
   window.SBS_observeCards && window.SBS_observeCards(container);
   window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
@@ -134,12 +182,15 @@ async function sbsLoadCombinedGallery(containerId, folders) {
   container.classList.add("is-loading");
 
   try {
+    const excluded = await sbsLoadExcludeList();
+
     const perFolder = await Promise.all(
       folders.map((f) =>
         sbsFetchFolder(f.path)
           .then((entries) =>
             entries
               .filter(sbsIsImage)
+              .filter((e) => !excluded.has(e.name))
               .sort((a, b) => a.name.localeCompare(b.name))
               .map((e) => ({ entry: e, label: f.label }))
           )
