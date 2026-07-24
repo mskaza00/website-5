@@ -6,3 +6,7 @@
 #   Example: 05-sunset-kick.jpg
 # - Lines starting with # are ignored (comments like this one).
 # - Blank lines are ignored too.
+_F2A1136.jpg
+_F2A1197.jpg
+_F2A1547.jpg
+_F2A1130.jpg
