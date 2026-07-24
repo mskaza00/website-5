@@ -1,0 +1,8 @@
+# List photo filenames here (one per line) to hide them from the
+# homepage combined feed. They will still show up normally on their
+# own category page (Sports / Portraits / Events).
+#
+# - Just the filename, exactly as it appears in GitHub — no folder path.
+#   Example: 05-sunset-kick.jpg
+# - Lines starting with # are ignored (comments like this one).
+# - Blank lines are ignored too.
