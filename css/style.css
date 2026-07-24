@@ -708,6 +708,7 @@ section { position: relative; z-index: 1; }
   .dropdown.is-open .dropdown-menu {
     max-height: 220px;
     padding: 0.3rem 0;
+    transform: none;
   }
 
   .dropdown-menu a {
