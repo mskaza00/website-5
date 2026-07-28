@@ -149,54 +149,6 @@ function sbsFinishContainer(container) {
   window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
 }
 
-/* Appends photo cards into a container in small batches as the user scrolls
-   near the bottom, rather than creating/requesting every photo up front.
-   Keeps initial load light and avoids pulling images nobody ever scrolls to. */
-const SBS_BATCH_SIZE = 10;
-
-function sbsAppendInBatches(container, entries, label) {
-  let index = 0;
-
-  function appendNextBatch() {
-    const frag = document.createDocumentFragment();
-    const slice = entries.slice(index, index + SBS_BATCH_SIZE);
-    slice.forEach((item) => {
-      const entry = item.entry || item;
-      const itemLabel = item.label !== undefined ? item.label : label;
-      frag.appendChild(sbsRenderPhotoCard(entry, itemLabel));
-    });
-    container.appendChild(frag);
-    window.SBS_observeCards && window.SBS_observeCards(container);
-    index += slice.length;
-  }
-
-  appendNextBatch();
-  window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
-
-  if (index >= entries.length) return;
-
-  const sentinel = document.createElement("div");
-  sentinel.className = "sbs-scroll-sentinel";
-  sentinel.setAttribute("aria-hidden", "true");
-  container.appendChild(sentinel);
-
-  const observer = new IntersectionObserver(
-    (obsEntries) => {
-      obsEntries.forEach((obsEntry) => {
-        if (!obsEntry.isIntersecting || index >= entries.length) return;
-        appendNextBatch();
-        if (index >= entries.length) {
-          observer.disconnect();
-          sentinel.remove();
-        }
-      });
-    },
-    { rootMargin: "800px 0px" }
-  );
-
-  observer.observe(sentinel);
-}
-
 /* Single category (Portraits / Sports / Events pages) */
 async function sbsLoadGallery(containerId, folderPath, label) {
   const container = document.getElementById(containerId);
@@ -213,8 +165,10 @@ async function sbsLoadGallery(containerId, folderPath, label) {
       return;
     }
 
-    sbsAppendInBatches(container, images, label);
-    return;
+    const frag = document.createDocumentFragment();
+    images.forEach((entry) => frag.appendChild(sbsRenderPhotoCard(entry, label)));
+    container.appendChild(frag);
+    sbsFinishContainer(container);
   } catch (err) {
     container.classList.remove("is-loading");
     container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}). If this keeps happening, GitHub's free API limit may have been hit — it resets within the hour.</div>`;
@@ -259,8 +213,10 @@ async function sbsLoadCombinedGallery(containerId, folders) {
       return;
     }
 
-    sbsAppendInBatches(container, merged);
-    return;
+    const frag = document.createDocumentFragment();
+    merged.forEach((item) => frag.appendChild(sbsRenderPhotoCard(item.entry, item.label)));
+    container.appendChild(frag);
+    sbsFinishContainer(container);
   } catch (err) {
     container.classList.remove("is-loading");
     container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}).</div>`;
