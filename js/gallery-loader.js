@@ -81,9 +81,8 @@ function sbsRenderPhotoCard(entry, label) {
   card.dataset.caption = label ? `${label} — ${entry.name}` : entry.name;
 
   const img = document.createElement("img");
-  img.src = entry.download_url;
+  img.dataset.src = entry.download_url; // real download deferred — see sbsLazyLoadObserver
   img.alt = label ? `${label} photo by Shots By Skaza` : "Photo by Shots By Skaza";
-  img.loading = "lazy";
   card.appendChild(img);
 
   const a = document.createElement("span");
@@ -95,6 +94,88 @@ function sbsRenderPhotoCard(entry, label) {
 
   return card;
 }
+
+/* Fetches an image only once it's genuinely about to scroll into view. */
+const sbsLazyLoadObserver = new IntersectionObserver(
+  (entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const img = entry.target;
+      if (img.dataset.src) {
+        img.src = img.dataset.src;
+        delete img.dataset.src;
+      }
+      sbsLazyLoadObserver.unobserve(img);
+    });
+  },
+  { rootMargin: "400px 0px" }
+);
+
+/* ---------------- JS-built masonry columns ----------------
+   Photos are assigned to a fixed column up front, in order — round robin —
+   before any image has loaded. A late-arriving image can only ever grow
+   the column it already occupies; it can never move to a different column
+   or shuffle other photos' positions, unlike CSS column-count, which
+   rebalances every column globally whenever any image's size resolves. */
+
+function sbsGetColumnCount() {
+  const w = window.innerWidth;
+  if (w >= 1900) return 4;
+  if (w >= 1100) return 3;
+  return 2;
+}
+
+function sbsBuildColumns(container, count) {
+  container.innerHTML = "";
+  const cols = [];
+  for (let i = 0; i < count; i++) {
+    const col = document.createElement("div");
+    col.className = "masonry-col";
+    container.appendChild(col);
+    cols.push(col);
+  }
+  return cols;
+}
+
+function sbsDistributeCards(container, entries, label) {
+  const count = sbsGetColumnCount();
+  const cols = sbsBuildColumns(container, count);
+
+  const cards = entries.map((item, i) => {
+    const entry = item.entry || item;
+    const itemLabel = item.label !== undefined ? item.label : label;
+    const card = sbsRenderPhotoCard(entry, itemLabel);
+    cols[i % count].appendChild(card);
+    return card;
+  });
+
+  cards.forEach((card) => {
+    const img = card.querySelector("img");
+    if (img) sbsLazyLoadObserver.observe(img);
+  });
+
+  container.dataset.sbsColumns = String(count);
+  container._sbsEntries = entries;
+  container._sbsLabel = label;
+
+  sbsFinishContainer(container);
+}
+
+// Rebuild the column layout if the viewport crosses a breakpoint (2/3/4
+// columns), so photos redistribute cleanly instead of staying stuck in a
+// column count meant for a different screen size.
+let sbsResizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(sbsResizeTimer);
+  sbsResizeTimer = setTimeout(() => {
+    const count = sbsGetColumnCount();
+    document.querySelectorAll(".masonry[data-sbs-columns]").forEach((container) => {
+      if (Number(container.dataset.sbsColumns) === count) return;
+      if (!container._sbsEntries) return;
+      sbsDistributeCards(container, container._sbsEntries, container._sbsLabel);
+    });
+  }, 200);
+});
 
 /* Homepage exclude list — a plain-text file in the repo root. Filenames
    listed there are skipped from the homepage combined feed only; they
@@ -165,10 +246,7 @@ async function sbsLoadGallery(containerId, folderPath, label) {
       return;
     }
 
-    const frag = document.createDocumentFragment();
-    images.forEach((entry) => frag.appendChild(sbsRenderPhotoCard(entry, label)));
-    container.appendChild(frag);
-    sbsFinishContainer(container);
+    sbsDistributeCards(container, images, label);
   } catch (err) {
     container.classList.remove("is-loading");
     container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}). If this keeps happening, GitHub's free API limit may have been hit — it resets within the hour.</div>`;
@@ -213,10 +291,7 @@ async function sbsLoadCombinedGallery(containerId, folders) {
       return;
     }
 
-    const frag = document.createDocumentFragment();
-    merged.forEach((item) => frag.appendChild(sbsRenderPhotoCard(item.entry, item.label)));
-    container.appendChild(frag);
-    sbsFinishContainer(container);
+    sbsDistributeCards(container, merged);
   } catch (err) {
     container.classList.remove("is-loading");
     container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}).</div>`;
