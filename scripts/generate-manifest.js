@@ -1,1 +1,35 @@
+name: Generate photo manifests
 
+# Runs automatically whenever anything under photos/ changes (upload,
+# delete, rename), and can also be triggered manually from the Actions
+# tab if you ever want to force a refresh.
+on:
+  push:
+    paths:
+      - "photos/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install
+
+      - run: npm run generate-manifest
+
+      - name: Commit updated manifests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add photos/**/manifest.json
+          git diff --staged --quiet || git commit -m "Auto-update photo dimension manifests"
+          git push
