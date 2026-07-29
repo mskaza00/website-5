@@ -119,14 +119,91 @@ function sbsFinishContainer(container) {
   window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
 }
 
+/* ---------------- Dimension probing (no full download) ----------------
+   Image formats store their width/height in the first few KB of the file.
+   A Range request pulls just enough bytes to read that header directly —
+   real dimensions, without ever downloading the full-resolution photo. */
+
+async function sbsProbeDimensions(url) {
+  try {
+    const res = await fetch(url, { headers: { Range: "bytes=0-65535" } });
+    if (!res.ok) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return sbsParseImageDimensions(bytes);
+  } catch (e) {
+    return null;
+  }
+}
+
+function sbsParseImageDimensions(b) {
+  // PNG
+  if (b.length > 24 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) {
+    return {
+      width: (b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19],
+      height: (b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23],
+    };
+  }
+  // GIF
+  if (b.length > 10 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) {
+    return { width: b[6] | (b[7] << 8), height: b[8] | (b[9] << 8) };
+  }
+  // JPEG — walk markers to find the SOF (start-of-frame) segment
+  if (b.length > 4 && b[0] === 0xff && b[1] === 0xd8) {
+    let offset = 2;
+    while (offset < b.length - 9) {
+      if (b[offset] !== 0xff) {
+        offset++;
+        continue;
+      }
+      const marker = b[offset + 1];
+      const isSOF =
+        (marker >= 0xc0 && marker <= 0xc3) ||
+        (marker >= 0xc5 && marker <= 0xc7) ||
+        (marker >= 0xc9 && marker <= 0xcb) ||
+        (marker >= 0xcd && marker <= 0xcf);
+      if (isSOF) {
+        return {
+          height: (b[offset + 5] << 8) | b[offset + 6],
+          width: (b[offset + 7] << 8) | b[offset + 8],
+        };
+      }
+      const segLen = (b[offset + 2] << 8) | b[offset + 3];
+      offset += 2 + segLen;
+    }
+    return null; // SOF marker fell outside the probed byte range
+  }
+  // WebP
+  if (
+    b.length > 30 &&
+    b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+    b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50
+  ) {
+    const fmt = String.fromCharCode(b[12], b[13], b[14], b[15]);
+    if (fmt === "VP8 ") {
+      return { width: (b[26] | (b[27] << 8)) & 0x3fff, height: (b[28] | (b[29] << 8)) & 0x3fff };
+    }
+    if (fmt === "VP8L") {
+      const w = 1 + (((b[22] & 0x3f) << 8) | b[21]);
+      const h = 1 + (((b[24] & 0x0f) << 10) | (b[23] << 2) | ((b[22] & 0xc0) >> 6));
+      return { width: w, height: h };
+    }
+    if (fmt === "VP8X") {
+      return {
+        width: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)),
+        height: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)),
+      };
+    }
+  }
+  return null; // unrecognized format (e.g. AVIF) — caller falls back to a default ratio
+}
+
 /* ---------------- JS-built masonry columns ----------------
-   Each photo is assigned to a column immediately, in order — round robin —
-   before any image has loaded. A late-arriving image can only ever grow
-   the column it already occupies. It never moves to a different column
-   and never shuffles any other photo's position. This is plain block flow
-   inside each column (not CSS multi-column), so the browser never needs
-   to know the total content height in advance — which is exactly what
-   made CSS `columns` fight with lazy loading. */
+   Each photo's real (probed, not downloaded) height determines which
+   column it's assigned to — always the currently shortest one, exactly
+   like traditional Pinterest-style masonry. Assignment happens once, up
+   front, before any full-resolution image has loaded, so a photo can
+   never later jump to a different column or shuffle another photo's
+   position — only the column it's already in can grow. */
 
 function sbsGetColumnCount() {
   const w = window.innerWidth;
@@ -147,15 +224,31 @@ function sbsBuildColumns(container, count) {
   return cols;
 }
 
-function sbsRenderCards(container, entries, label) {
+async function sbsRenderCards(container, entries, label) {
   const count = sbsGetColumnCount();
   const cols = sbsBuildColumns(container, count);
+  const colHeights = new Array(count).fill(0);
 
+  const dims = await Promise.all(
+    entries.map((item) => sbsProbeDimensions((item.entry || item).download_url))
+  );
+
+  const REF_WIDTH = 300; // arbitrary reference width — only used to compare relative heights
   const cards = entries.map((item, i) => {
     const entry = item.entry || item;
     const itemLabel = item.label !== undefined ? item.label : label;
     const card = sbsRenderPhotoCard(entry, itemLabel);
-    cols[i % count].appendChild(card);
+
+    const d = dims[i];
+    const estHeight = d && d.width ? (d.height / d.width) * REF_WIDTH : REF_WIDTH;
+
+    let shortest = 0;
+    for (let c = 1; c < count; c++) {
+      if (colHeights[c] < colHeights[shortest]) shortest = c;
+    }
+    cols[shortest].appendChild(card);
+    colHeights[shortest] += estHeight;
+
     return card;
   });
 
@@ -244,14 +337,15 @@ async function sbsLoadGallery(containerId, folderPath, label) {
   try {
     const entries = await sbsFetchFolder(folderPath);
     const images = entries.filter(sbsIsImage).sort((a, b) => a.name.localeCompare(b.name));
-    container.classList.remove("is-loading");
 
     if (!images.length) {
+      container.classList.remove("is-loading");
       container.innerHTML = `<div class="gallery-empty">No photos here yet. Drop images into <code>${folderPath}/</code> on GitHub and they'll show up automatically.</div>`;
       return;
     }
 
-    sbsRenderCards(container, images, label);
+    await sbsRenderCards(container, images, label);
+    container.classList.remove("is-loading");
   } catch (err) {
     container.classList.remove("is-loading");
     container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}). If this keeps happening, GitHub's free API limit may have been hit — it resets within the hour.</div>`;
@@ -289,14 +383,14 @@ async function sbsLoadCombinedGallery(containerId, folders) {
       });
     }
 
-    container.classList.remove("is-loading");
-
     if (!merged.length) {
+      container.classList.remove("is-loading");
       container.innerHTML = `<div class="gallery-empty">No photos yet — add images to the photos/ folders on GitHub and they'll appear here automatically.</div>`;
       return;
     }
 
-    sbsRenderCards(container, merged);
+    await sbsRenderCards(container, merged);
+    container.classList.remove("is-loading");
   } catch (err) {
     container.classList.remove("is-loading");
     container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}).</div>`;
