@@ -81,9 +81,8 @@ function sbsRenderPhotoCard(entry, label) {
   card.dataset.caption = label ? `${label} — ${entry.name}` : entry.name;
 
   const img = document.createElement("img");
-  img.src = entry.download_url;
+  img.dataset.src = entry.download_url; // real src assigned by sbsLazyLoadObserver below
   img.alt = label ? `${label} photo by Shots By Skaza` : "Photo by Shots By Skaza";
-  img.loading = "lazy"; // native browser lazy loading — no custom JS reordering involved
   card.appendChild(img);
 
   const a = document.createElement("span");
@@ -96,6 +95,26 @@ function sbsRenderPhotoCard(entry, label) {
   return card;
 }
 
+/* Only assigns the real src once an image is genuinely near the viewport.
+   This replaces native loading="lazy" because CSS multi-column masonry's
+   layout/balance step tends to defeat the native heuristic (see note on
+   .masonry / column-fill in style.css). Does not touch card creation,
+   order, or placement in any way — sbsRenderCards below is unchanged. */
+const sbsLazyLoadObserver = new IntersectionObserver(
+  (entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const img = entry.target;
+      if (img.dataset.src) {
+        img.src = img.dataset.src;
+        delete img.dataset.src;
+      }
+      sbsLazyLoadObserver.unobserve(img);
+    });
+  },
+  { rootMargin: "600px 0px" }
+);
+
 function sbsFinishContainer(container) {
   window.SBS_observeCards && window.SBS_observeCards(container);
   window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
@@ -107,12 +126,18 @@ function sbsFinishContainer(container) {
    a photo after it's been placed. */
 function sbsRenderCards(container, entries, label) {
   const frag = document.createDocumentFragment();
-  entries.forEach((item) => {
+  const cards = entries.map((item) => {
     const entry = item.entry || item;
     const itemLabel = item.label !== undefined ? item.label : label;
-    frag.appendChild(sbsRenderPhotoCard(entry, itemLabel));
+    const card = sbsRenderPhotoCard(entry, itemLabel);
+    frag.appendChild(card);
+    return card;
   });
   container.appendChild(frag);
+  cards.forEach((card) => {
+    const img = card.querySelector("img");
+    if (img) sbsLazyLoadObserver.observe(img);
+  });
   sbsFinishContainer(container);
 }
 
