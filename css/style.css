@@ -387,11 +387,19 @@ section { position: relative; z-index: 1; }
    client galleries). */
 
 .masonry {
-  columns: 4 260px;
-  column-fill: auto;
-  column-gap: 6px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   padding: 0 6px 6px;
   max-width: none;
+}
+
+.masonry-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .masonry.is-loading { min-height: 40vh; }
@@ -400,8 +408,6 @@ section { position: relative; z-index: 1; }
   position: relative;
   display: block;
   width: 100%;
-  break-inside: avoid;
-  margin-bottom: 6px;
   border-radius: var(--radius);
   overflow: hidden;
   background: var(--bg-panel);
