@@ -388,6 +388,7 @@ section { position: relative; z-index: 1; }
 
 .masonry {
   columns: 4 260px;
+  column-fill: auto;
   column-gap: 6px;
   padding: 0 6px 6px;
   max-width: none;
