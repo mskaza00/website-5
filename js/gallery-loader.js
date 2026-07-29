@@ -81,8 +81,9 @@ function sbsRenderPhotoCard(entry, label) {
   card.dataset.caption = label ? `${label} — ${entry.name}` : entry.name;
 
   const img = document.createElement("img");
-  img.dataset.src = entry.download_url; // real download deferred — see sbsLazyLoadObserver
+  img.src = entry.download_url;
   img.alt = label ? `${label} photo by Shots By Skaza` : "Photo by Shots By Skaza";
+  img.loading = "lazy"; // native browser lazy loading — no custom JS reordering involved
   card.appendChild(img);
 
   const a = document.createElement("span");
@@ -95,87 +96,25 @@ function sbsRenderPhotoCard(entry, label) {
   return card;
 }
 
-/* Fetches an image only once it's genuinely about to scroll into view. */
-const sbsLazyLoadObserver = new IntersectionObserver(
-  (entries) => {
-    entries.forEach((entry) => {
-      if (!entry.isIntersecting) return;
-      const img = entry.target;
-      if (img.dataset.src) {
-        img.src = img.dataset.src;
-        delete img.dataset.src;
-      }
-      sbsLazyLoadObserver.unobserve(img);
-    });
-  },
-  { rootMargin: "400px 0px" }
-);
-
-/* ---------------- JS-built masonry columns ----------------
-   Photos are assigned to a fixed column up front, in order — round robin —
-   before any image has loaded. A late-arriving image can only ever grow
-   the column it already occupies; it can never move to a different column
-   or shuffle other photos' positions, unlike CSS column-count, which
-   rebalances every column globally whenever any image's size resolves. */
-
-function sbsGetColumnCount() {
-  const w = window.innerWidth;
-  if (w >= 1900) return 4;
-  if (w >= 1100) return 3;
-  return 2;
+function sbsFinishContainer(container) {
+  window.SBS_observeCards && window.SBS_observeCards(container);
+  window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
 }
 
-function sbsBuildColumns(container, count) {
-  container.innerHTML = "";
-  const cols = [];
-  for (let i = 0; i < count; i++) {
-    const col = document.createElement("div");
-    col.className = "masonry-col";
-    container.appendChild(col);
-    cols.push(col);
-  }
-  return cols;
-}
-
-function sbsDistributeCards(container, entries, label) {
-  const count = sbsGetColumnCount();
-  const cols = sbsBuildColumns(container, count);
-
-  const cards = entries.map((item, i) => {
+/* Renders every card in one pass, in the exact order given — a plain CSS
+   grid (see .masonry in style.css) lays them out left-to-right, top-to-
+   bottom in that same order. Nothing here reorders, rebuilds, or moves
+   a photo after it's been placed. */
+function sbsRenderCards(container, entries, label) {
+  const frag = document.createDocumentFragment();
+  entries.forEach((item) => {
     const entry = item.entry || item;
     const itemLabel = item.label !== undefined ? item.label : label;
-    const card = sbsRenderPhotoCard(entry, itemLabel);
-    cols[i % count].appendChild(card);
-    return card;
+    frag.appendChild(sbsRenderPhotoCard(entry, itemLabel));
   });
-
-  cards.forEach((card) => {
-    const img = card.querySelector("img");
-    if (img) sbsLazyLoadObserver.observe(img);
-  });
-
-  container.dataset.sbsColumns = String(count);
-  container._sbsEntries = entries;
-  container._sbsLabel = label;
-
+  container.appendChild(frag);
   sbsFinishContainer(container);
 }
-
-// Rebuild the column layout if the viewport crosses a breakpoint (2/3/4
-// columns), so photos redistribute cleanly instead of staying stuck in a
-// column count meant for a different screen size.
-let sbsResizeTimer = null;
-window.addEventListener("resize", () => {
-  clearTimeout(sbsResizeTimer);
-  sbsResizeTimer = setTimeout(() => {
-    const count = sbsGetColumnCount();
-    document.querySelectorAll(".masonry[data-sbs-columns]").forEach((container) => {
-      if (Number(container.dataset.sbsColumns) === count) return;
-      if (!container._sbsEntries) return;
-      sbsDistributeCards(container, container._sbsEntries, container._sbsLabel);
-    });
-  }, 200);
-});
 
 /* Homepage exclude list — a plain-text file in the repo root. Filenames
    listed there are skipped from the homepage combined feed only; they
@@ -225,11 +164,6 @@ async function sbsLoadExcludeList() {
   return SBS_EXCLUDE_CACHE;
 }
 
-function sbsFinishContainer(container) {
-  window.SBS_observeCards && window.SBS_observeCards(container);
-  window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
-}
-
 /* Single category (Portraits / Sports / Events pages) */
 async function sbsLoadGallery(containerId, folderPath, label) {
   const container = document.getElementById(containerId);
@@ -246,7 +180,7 @@ async function sbsLoadGallery(containerId, folderPath, label) {
       return;
     }
 
-    sbsDistributeCards(container, images, label);
+    sbsRenderCards(container, images, label);
   } catch (err) {
     container.classList.remove("is-loading");
     container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}). If this keeps happening, GitHub's free API limit may have been hit — it resets within the hour.</div>`;
@@ -291,7 +225,7 @@ async function sbsLoadCombinedGallery(containerId, folders) {
       return;
     }
 
-    sbsDistributeCards(container, merged);
+    sbsRenderCards(container, merged);
   } catch (err) {
     container.classList.remove("is-loading");
     container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}).</div>`;
