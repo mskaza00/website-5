@@ -96,10 +96,9 @@ function sbsRenderPhotoCard(entry, label) {
 }
 
 /* Only assigns the real src once an image is genuinely near the viewport.
-   This replaces native loading="lazy" because CSS multi-column masonry's
-   layout/balance step tends to defeat the native heuristic (see note on
-   .masonry / column-fill in style.css). Does not touch card creation,
-   order, or placement in any way — sbsRenderCards below is unchanged. */
+   Works safely with the JS-built columns below because each column is
+   plain block flow — no global layout/balance step exists that could be
+   thrown off by images resolving their height at different times. */
 const sbsLazyLoadObserver = new IntersectionObserver(
   (entries) => {
     entries.forEach((entry) => {
@@ -120,26 +119,73 @@ function sbsFinishContainer(container) {
   window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
 }
 
-/* Renders every card in one pass, in the exact order given — a plain CSS
-   grid (see .masonry in style.css) lays them out left-to-right, top-to-
-   bottom in that same order. Nothing here reorders, rebuilds, or moves
-   a photo after it's been placed. */
+/* ---------------- JS-built masonry columns ----------------
+   Each photo is assigned to a column immediately, in order — round robin —
+   before any image has loaded. A late-arriving image can only ever grow
+   the column it already occupies. It never moves to a different column
+   and never shuffles any other photo's position. This is plain block flow
+   inside each column (not CSS multi-column), so the browser never needs
+   to know the total content height in advance — which is exactly what
+   made CSS `columns` fight with lazy loading. */
+
+function sbsGetColumnCount() {
+  const w = window.innerWidth;
+  if (w >= 1900) return 4;
+  if (w >= 1100) return 3;
+  return 2;
+}
+
+function sbsBuildColumns(container, count) {
+  container.innerHTML = "";
+  const cols = [];
+  for (let i = 0; i < count; i++) {
+    const col = document.createElement("div");
+    col.className = "masonry-col";
+    container.appendChild(col);
+    cols.push(col);
+  }
+  return cols;
+}
+
 function sbsRenderCards(container, entries, label) {
-  const frag = document.createDocumentFragment();
-  const cards = entries.map((item) => {
+  const count = sbsGetColumnCount();
+  const cols = sbsBuildColumns(container, count);
+
+  const cards = entries.map((item, i) => {
     const entry = item.entry || item;
     const itemLabel = item.label !== undefined ? item.label : label;
     const card = sbsRenderPhotoCard(entry, itemLabel);
-    frag.appendChild(card);
+    cols[i % count].appendChild(card);
     return card;
   });
-  container.appendChild(frag);
+
   cards.forEach((card) => {
     const img = card.querySelector("img");
     if (img) sbsLazyLoadObserver.observe(img);
   });
+
+  container.dataset.sbsColumns = String(count);
+  container._sbsEntries = entries;
+  container._sbsLabel = label;
+
   sbsFinishContainer(container);
 }
+
+// Rebuild columns if the viewport crosses a breakpoint (2/3/4 columns), so
+// photos redistribute cleanly instead of staying stuck at a column count
+// meant for a different screen size.
+let sbsResizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(sbsResizeTimer);
+  sbsResizeTimer = setTimeout(() => {
+    const count = sbsGetColumnCount();
+    document.querySelectorAll(".masonry[data-sbs-columns]").forEach((container) => {
+      if (Number(container.dataset.sbsColumns) === count) return;
+      if (!container._sbsEntries) return;
+      sbsRenderCards(container, container._sbsEntries, container._sbsLabel);
+    });
+  }, 200);
+});
 
 /* Homepage exclude list — a plain-text file in the repo root. Filenames
    listed there are skipped from the homepage combined feed only; they
