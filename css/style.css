@@ -387,10 +387,8 @@ section { position: relative; z-index: 1; }
    client galleries). */
 
 .masonry {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  align-items: start;
-  gap: 6px;
+  columns: 4 260px;
+  column-gap: 6px;
   padding: 0 6px 6px;
   max-width: none;
 }
@@ -401,6 +399,8 @@ section { position: relative; z-index: 1; }
   position: relative;
   display: block;
   width: 100%;
+  break-inside: avoid;
+  margin-bottom: 6px;
   border-radius: var(--radius);
   overflow: hidden;
   background: var(--bg-panel);
