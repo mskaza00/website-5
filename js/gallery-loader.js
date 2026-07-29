@@ -119,88 +119,62 @@ function sbsFinishContainer(container) {
   window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
 }
 
-/* ---------------- Dimension probing (no full download) ----------------
-   Image formats store their width/height in the first few KB of the file.
-   A Range request pulls just enough bytes to read that header directly —
-   real dimensions, without ever downloading the full-resolution photo. */
+/* ---------------- Photo dimension manifests ----------------
+   Each photos/<folder>/manifest.json lists every photo's real width and
+   height, generated ahead of time by scripts/generate-manifest.js (see
+   the accompanying GitHub Action, which runs it automatically on every
+   push touching photos/). One small JSON fetch per folder gives us every
+   dimension needed for true masonry — no per-photo network requests. */
 
-async function sbsProbeDimensions(url) {
+const SBS_MANIFEST_CACHE = new Map();
+
+async function sbsLoadManifest(folderPath) {
+  if (SBS_MANIFEST_CACHE.has(folderPath)) return SBS_MANIFEST_CACHE.get(folderPath);
+
+  const map = new Map();
+  const cacheKey = `sbs-cache:${folderPath}/manifest.json`;
+
   try {
-    const res = await fetch(url, { headers: { Range: "bytes=0-65535" } });
-    if (!res.ok) return null;
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    return sbsParseImageDimensions(bytes);
+    const cached = sessionStorage.getItem(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && typeof parsed.t === "number" && Date.now() - parsed.t < SBS_CACHE_TTL_MS) {
+        parsed.data.forEach((item) => map.set(item.name, item));
+        SBS_MANIFEST_CACHE.set(folderPath, map);
+        return map;
+      }
+    }
   } catch (e) {
-    return null;
+    /* skip cache on error */
   }
-}
 
-function sbsParseImageDimensions(b) {
-  // PNG
-  if (b.length > 24 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) {
-    return {
-      width: (b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19],
-      height: (b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23],
-    };
-  }
-  // GIF
-  if (b.length > 10 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) {
-    return { width: b[6] | (b[7] << 8), height: b[8] | (b[9] << 8) };
-  }
-  // JPEG — walk markers to find the SOF (start-of-frame) segment
-  if (b.length > 4 && b[0] === 0xff && b[1] === 0xd8) {
-    let offset = 2;
-    while (offset < b.length - 9) {
-      if (b[offset] !== 0xff) {
-        offset++;
-        continue;
+  try {
+    const url = `https://raw.githubusercontent.com/${SBS_REPO_OWNER}/${SBS_REPO_NAME}/main/${folderPath}/manifest.json`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      data.forEach((item) => map.set(item.name, item));
+      try {
+        sessionStorage.setItem(cacheKey, JSON.stringify({ t: Date.now(), data }));
+      } catch (e) {
+        /* skip cache on error */
       }
-      const marker = b[offset + 1];
-      const isSOF =
-        (marker >= 0xc0 && marker <= 0xc3) ||
-        (marker >= 0xc5 && marker <= 0xc7) ||
-        (marker >= 0xc9 && marker <= 0xcb) ||
-        (marker >= 0xcd && marker <= 0xcf);
-      if (isSOF) {
-        return {
-          height: (b[offset + 5] << 8) | b[offset + 6],
-          width: (b[offset + 7] << 8) | b[offset + 8],
-        };
-      }
-      const segLen = (b[offset + 2] << 8) | b[offset + 3];
-      offset += 2 + segLen;
     }
-    return null; // SOF marker fell outside the probed byte range
+    // A missing manifest (404) just means this folder hasn't been scanned
+    // yet — not an error. Affected photos fall back to a default size
+    // guess in sbsRenderCards until the manifest catches up.
+  } catch (e) {
+    /* network error — same graceful fallback as above */
   }
-  // WebP
-  if (
-    b.length > 30 &&
-    b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
-    b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50
-  ) {
-    const fmt = String.fromCharCode(b[12], b[13], b[14], b[15]);
-    if (fmt === "VP8 ") {
-      return { width: (b[26] | (b[27] << 8)) & 0x3fff, height: (b[28] | (b[29] << 8)) & 0x3fff };
-    }
-    if (fmt === "VP8L") {
-      const w = 1 + (((b[22] & 0x3f) << 8) | b[21]);
-      const h = 1 + (((b[24] & 0x0f) << 10) | (b[23] << 2) | ((b[22] & 0xc0) >> 6));
-      return { width: w, height: h };
-    }
-    if (fmt === "VP8X") {
-      return {
-        width: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)),
-        height: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)),
-      };
-    }
-  }
-  return null; // unrecognized format (e.g. AVIF) — caller falls back to a default ratio
+
+  SBS_MANIFEST_CACHE.set(folderPath, map);
+  return map;
 }
 
 /* ---------------- JS-built masonry columns ----------------
-   Each photo's real (probed, not downloaded) height determines which
-   column it's assigned to — always the currently shortest one, exactly
-   like traditional Pinterest-style masonry. Assignment happens once, up
+   Each photo's real (manifest-supplied) height determines which column
+   it's assigned to — always the currently shortest one, exactly like
+   traditional Pinterest-style masonry. Assignment happens once, up
    front, before any full-resolution image has loaded, so a photo can
    never later jump to a different column or shuffle another photo's
    position — only the column it's already in can grow. */
@@ -224,23 +198,19 @@ function sbsBuildColumns(container, count) {
   return cols;
 }
 
-async function sbsRenderCards(container, entries, label) {
+function sbsRenderCards(container, entries, label) {
   const count = sbsGetColumnCount();
   const cols = sbsBuildColumns(container, count);
   const colHeights = new Array(count).fill(0);
 
-  const dims = await Promise.all(
-    entries.map((item) => sbsProbeDimensions((item.entry || item).download_url))
-  );
-
   const REF_WIDTH = 300; // arbitrary reference width — only used to compare relative heights
-  const cards = entries.map((item, i) => {
+  const cards = entries.map((item) => {
     const entry = item.entry || item;
     const itemLabel = item.label !== undefined ? item.label : label;
     const card = sbsRenderPhotoCard(entry, itemLabel);
 
-    const d = dims[i];
-    const estHeight = d && d.width ? (d.height / d.width) * REF_WIDTH : REF_WIDTH;
+    const estHeight =
+      entry.width && entry.height ? (entry.height / entry.width) * REF_WIDTH : REF_WIDTH;
 
     let shortest = 0;
     for (let c = 1; c < count; c++) {
@@ -335,8 +305,17 @@ async function sbsLoadGallery(containerId, folderPath, label) {
   container.classList.add("is-loading");
 
   try {
-    const entries = await sbsFetchFolder(folderPath);
-    const images = entries.filter(sbsIsImage).sort((a, b) => a.name.localeCompare(b.name));
+    const [entries, manifest] = await Promise.all([
+      sbsFetchFolder(folderPath),
+      sbsLoadManifest(folderPath),
+    ]);
+    const images = entries
+      .filter(sbsIsImage)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((e) => {
+        const dims = manifest.get(e.name);
+        return dims ? { ...e, width: dims.width, height: dims.height } : e;
+      });
 
     if (!images.length) {
       container.classList.remove("is-loading");
@@ -344,7 +323,7 @@ async function sbsLoadGallery(containerId, folderPath, label) {
       return;
     }
 
-    await sbsRenderCards(container, images, label);
+    sbsRenderCards(container, images, label);
     container.classList.remove("is-loading");
   } catch (err) {
     container.classList.remove("is-loading");
@@ -362,17 +341,25 @@ async function sbsLoadCombinedGallery(containerId, folders) {
     const excluded = await sbsLoadExcludeList();
 
     const perFolder = await Promise.all(
-      folders.map((f) =>
-        sbsFetchFolder(f.path)
-          .then((entries) =>
-            entries
-              .filter(sbsIsImage)
-              .filter((e) => !excluded.has(e.name))
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map((e) => ({ entry: e, label: f.label }))
-          )
-          .catch(() => [])
-      )
+      folders.map(async (f) => {
+        try {
+          const [entries, manifest] = await Promise.all([
+            sbsFetchFolder(f.path),
+            sbsLoadManifest(f.path),
+          ]);
+          return entries
+            .filter(sbsIsImage)
+            .filter((e) => !excluded.has(e.name))
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((e) => {
+              const dims = manifest.get(e.name);
+              const withDims = dims ? { ...e, width: dims.width, height: dims.height } : e;
+              return { entry: withDims, label: f.label };
+            });
+        } catch (e) {
+          return [];
+        }
+      })
     );
 
     const merged = [];
@@ -389,7 +376,7 @@ async function sbsLoadCombinedGallery(containerId, folders) {
       return;
     }
 
-    await sbsRenderCards(container, merged);
+    sbsRenderCards(container, merged);
     container.classList.remove("is-loading");
   } catch (err) {
     container.classList.remove("is-loading");
