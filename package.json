@@ -1,0 +1,11 @@
+{
+  "name": "shotsbyskaza-manifest-tools",
+  "private": true,
+  "description": "Generates photos/**/manifest.json dimension files. Not part of the live site itself — the site is still plain HTML/CSS/JS.",
+  "scripts": {
+    "generate-manifest": "node scripts/generate-manifest.js"
+  },
+  "devDependencies": {
+    "image-size": "^1.1.1"
+  }
+}
