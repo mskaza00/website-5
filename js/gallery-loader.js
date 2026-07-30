@@ -1,32 +1,37 @@
 /* =============================================================
    ShotsBySkaza — photo loader
-   Reads folders directly from the GitHub repo via the GitHub
-   Contents API, so photos update just by adding/removing files
-   in photos/ on GitHub — no code changes needed.
+   Reads pre-generated manifest files (see /manifests) for the photo
+   list, dimensions, thumbnail path, and full-resolution path for each
+   category. Manifests + WebP thumbnails are generated automatically by
+   a GitHub Action (.github/workflows/generate-manifests.yml) every time
+   photos are added or removed — nothing to run by hand.
 
    HOW IT WORKS
-   - Each page asks for one or more folder paths (e.g. "photos/sports").
-   - We call the public GitHub API for that folder's file listing.
-   - Every image file found gets rendered into the page, at its
-     natural aspect ratio, in a CSS-masonry grid.
+   - manifests/<category>.json lists every photo in that category, e.g.
+     manifests/sports.json, manifests/clients/<slug>.json.
+   - manifests/clients/index.json lists every client gallery folder, for
+     the Client Galleries hub page.
+   - The gallery displays each photo's small WebP thumbnail. The
+     lightbox (see main.js) opens the full-resolution original only when
+     a photo is actually clicked.
+   - A photo's real width/height (from the manifest) is used to place it
+     into whichever masonry column is currently shortest — true masonry,
+     no cropping, no reordering after placement.
+   - Thumbnails are lazy: an <img> only gets a real src once it's near
+     the viewport (see sbsLazyLoadObserver below).
 
-   LIMITS TO KNOW ABOUT
-   - This only works for a PUBLIC repo (this one is).
-   - GitHub's API allows ~60 unauthenticated requests/hour per
-     visitor's IP. Fine for normal browsing; if a page ever shows
-     a load error, that's almost certainly why — it resets hourly.
-   - Photos are listed alphabetically by filename (GitHub doesn't
-     expose upload date), so name files like 01-xxx.jpg, 02-xxx.jpg
-     if you care about the order they appear in.
+   IF A MANIFEST IS MISSING
+   That just means the Action hasn't generated it yet for that folder
+   (e.g. right after adding a brand-new category or client folder) — the
+   affected gallery shows its normal "no photos yet" empty state rather
+   than an error. It resolves itself on the next push.
    ============================================================= */
 
 const SBS_REPO_OWNER = "mskaza00";
 const SBS_REPO_NAME = "website-5";
 
-const SBS_IMAGE_EXT = /\.(jpe?g|png|webp|gif|avif)$/i;
-
-function sbsIsImage(entry) {
-  return entry.type === "file" && SBS_IMAGE_EXT.test(entry.name);
+function sbsRawUrl(relPath) {
+  return `https://raw.githubusercontent.com/${SBS_REPO_OWNER}/${SBS_REPO_NAME}/main/${relPath}`;
 }
 
 function sbsFormatLabel(slug) {
@@ -36,52 +41,119 @@ function sbsFormatLabel(slug) {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// How long a folder listing is trusted before we ask GitHub again. Short enough
-// that newly-added/removed photos show up on a normal refresh; long enough to
-// avoid re-fetching every folder on every single click while browsing around.
+// How long a fetched manifest is trusted before asking GitHub again.
 const SBS_CACHE_TTL_MS = 2 * 60 * 1000;
 
-async function sbsFetchFolder(path) {
-  const cacheKey = `sbs-cache:${path}`;
+const SBS_JSON_CACHE = new Map();
+
+/* Fetches and caches any JSON file from the repo (manifests, the client
+   index, etc). Returns [] on a 404 or network error rather than
+   throwing — a missing manifest is a normal, temporary state, not a
+   bug, so callers don't need their own try/catch around this. */
+async function sbsLoadManifest(relPath) {
+  if (SBS_JSON_CACHE.has(relPath)) return SBS_JSON_CACHE.get(relPath);
+
+  const cacheKey = `sbs-cache:${relPath}`;
   try {
     const cached = sessionStorage.getItem(cacheKey);
     if (cached) {
       const parsed = JSON.parse(cached);
       if (parsed && typeof parsed.t === "number" && Date.now() - parsed.t < SBS_CACHE_TTL_MS) {
+        SBS_JSON_CACHE.set(relPath, parsed.data);
         return parsed.data;
       }
     }
   } catch (e) {
-    /* sessionStorage unavailable or corrupt — skip caching */
+    /* skip cache on error */
   }
 
-  const url = `https://api.github.com/repos/${SBS_REPO_OWNER}/${SBS_REPO_NAME}/contents/${path}`;
-  const res = await fetch(url, { headers: { Accept: "application/vnd.github+json" } });
-
-  if (res.status === 404) return []; // folder doesn't exist yet — treat as empty, not an error
-  if (!res.ok) throw new Error(`GitHub API responded ${res.status}`);
-
-  const data = await res.json();
-  const list = Array.isArray(data) ? data : [];
+  let data = [];
   try {
-    sessionStorage.setItem(cacheKey, JSON.stringify({ t: Date.now(), data: list }));
+    const res = await fetch(sbsRawUrl(relPath));
+    if (res.ok) data = await res.json();
   } catch (e) {
-    /* quota exceeded or unavailable — fine, just skip caching */
+    /* network error — fall through with empty data */
   }
-  return list;
+
+  SBS_JSON_CACHE.set(relPath, data);
+  try {
+    sessionStorage.setItem(cacheKey, JSON.stringify({ t: Date.now(), data }));
+  } catch (e) {
+    /* skip cache on error */
+  }
+
+  return data;
 }
 
-function sbsRenderPhotoCard(entry, label) {
+/* Homepage exclude list — a plain-text file in the repo root. Filenames
+   listed there are skipped from the homepage combined feed only; they
+   still show up normally on their own category page. */
+let SBS_EXCLUDE_CACHE = null;
+
+async function sbsLoadExcludeList() {
+  if (SBS_EXCLUDE_CACHE) return SBS_EXCLUDE_CACHE;
+
+  const cacheKey = "sbs-cache:homepage-exclude.txt";
+  try {
+    const cached = sessionStorage.getItem(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && typeof parsed.t === "number" && Date.now() - parsed.t < SBS_CACHE_TTL_MS) {
+        SBS_EXCLUDE_CACHE = new Set(parsed.data);
+        return SBS_EXCLUDE_CACHE;
+      }
+    }
+  } catch (e) {
+    /* skip cache on error */
+  }
+
+  try {
+    const res = await fetch(sbsRawUrl("homepage-exclude.txt"));
+    if (res.ok) {
+      const text = await res.text();
+      const names = text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"));
+      SBS_EXCLUDE_CACHE = new Set(names);
+      try {
+        sessionStorage.setItem(cacheKey, JSON.stringify({ t: Date.now(), data: names }));
+      } catch (e) {
+        /* skip cache on error */
+      }
+    } else {
+      SBS_EXCLUDE_CACHE = new Set();
+    }
+  } catch (e) {
+    SBS_EXCLUDE_CACHE = new Set();
+  }
+
+  return SBS_EXCLUDE_CACHE;
+}
+
+/* Converts a manifest entry (repo-relative paths) into what the renderer
+   needs (full raw URLs, ready to use as src/href). */
+function sbsManifestItemToRenderItem(entry) {
+  return {
+    name: entry.name,
+    width: entry.width,
+    height: entry.height,
+    thumbUrl: sbsRawUrl(entry.thumb || entry.src),
+    fullUrl: sbsRawUrl(entry.src),
+  };
+}
+
+function sbsRenderPhotoCard(item, label) {
   const card = document.createElement("a");
-  card.href = entry.download_url;
+  card.href = item.fullUrl; // full-resolution original — opens if a visitor middle-clicks/opens in new tab
   card.className = "photo-card";
   card.target = "_blank";
   card.rel = "noopener";
-  card.dataset.full = entry.download_url;
-  card.dataset.caption = label ? `${label} — ${entry.name}` : entry.name;
+  card.dataset.full = item.fullUrl; // used by the lightbox — original only loads on click
+  card.dataset.caption = label ? `${label} — ${item.name}` : item.name;
 
   const img = document.createElement("img");
-  img.dataset.src = entry.download_url; // real src assigned by sbsLazyLoadObserver below
+  img.dataset.src = item.thumbUrl; // thumbnail — real src assigned by sbsLazyLoadObserver below
   img.alt = label ? `${label} photo by Shots By Skaza` : "Photo by Shots By Skaza";
   card.appendChild(img);
 
@@ -95,10 +167,11 @@ function sbsRenderPhotoCard(entry, label) {
   return card;
 }
 
-/* Only assigns the real src once an image is genuinely near the viewport.
-   Works safely with the JS-built columns below because each column is
-   plain block flow — no global layout/balance step exists that could be
-   thrown off by images resolving their height at different times. */
+/* Only assigns the real thumbnail src once an image is genuinely near
+   the viewport. Works safely with the JS-built columns below because
+   each column is plain block flow — no global layout/balance step
+   exists that could be thrown off by images resolving at different
+   times, and thumbnails are small (WebP, ~900px wide) either way. */
 const sbsLazyLoadObserver = new IntersectionObserver(
   (entries) => {
     entries.forEach((entry) => {
@@ -119,65 +192,13 @@ function sbsFinishContainer(container) {
   window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
 }
 
-/* ---------------- Photo dimension manifests ----------------
-   Each photos/<folder>/manifest.json lists every photo's real width and
-   height, generated ahead of time by scripts/generate-manifest.js (see
-   the accompanying GitHub Action, which runs it automatically on every
-   push touching photos/). One small JSON fetch per folder gives us every
-   dimension needed for true masonry — no per-photo network requests. */
-
-const SBS_MANIFEST_CACHE = new Map();
-
-async function sbsLoadManifest(folderPath) {
-  if (SBS_MANIFEST_CACHE.has(folderPath)) return SBS_MANIFEST_CACHE.get(folderPath);
-
-  const map = new Map();
-  const cacheKey = `sbs-cache:${folderPath}/manifest.json`;
-
-  try {
-    const cached = sessionStorage.getItem(cacheKey);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (parsed && typeof parsed.t === "number" && Date.now() - parsed.t < SBS_CACHE_TTL_MS) {
-        parsed.data.forEach((item) => map.set(item.name, item));
-        SBS_MANIFEST_CACHE.set(folderPath, map);
-        return map;
-      }
-    }
-  } catch (e) {
-    /* skip cache on error */
-  }
-
-  try {
-    const url = `https://raw.githubusercontent.com/${SBS_REPO_OWNER}/${SBS_REPO_NAME}/main/${folderPath}/manifest.json`;
-    const res = await fetch(url);
-    if (res.ok) {
-      const data = await res.json();
-      data.forEach((item) => map.set(item.name, item));
-      try {
-        sessionStorage.setItem(cacheKey, JSON.stringify({ t: Date.now(), data }));
-      } catch (e) {
-        /* skip cache on error */
-      }
-    }
-    // A missing manifest (404) just means this folder hasn't been scanned
-    // yet — not an error. Affected photos fall back to a default size
-    // guess in sbsRenderCards until the manifest catches up.
-  } catch (e) {
-    /* network error — same graceful fallback as above */
-  }
-
-  SBS_MANIFEST_CACHE.set(folderPath, map);
-  return map;
-}
-
 /* ---------------- JS-built masonry columns ----------------
    Each photo's real (manifest-supplied) height determines which column
    it's assigned to — always the currently shortest one, exactly like
    traditional Pinterest-style masonry. Assignment happens once, up
-   front, before any full-resolution image has loaded, so a photo can
-   never later jump to a different column or shuffle another photo's
-   position — only the column it's already in can grow. */
+   front, before any thumbnail has loaded, so a photo can never later
+   jump to a different column or shuffle another photo's position —
+   only the column it's already in can grow. */
 
 function sbsGetColumnCount() {
   const w = window.innerWidth;
@@ -204,13 +225,12 @@ function sbsRenderCards(container, entries, label) {
   const colHeights = new Array(count).fill(0);
 
   const REF_WIDTH = 300; // arbitrary reference width — only used to compare relative heights
-  const cards = entries.map((item) => {
-    const entry = item.entry || item;
-    const itemLabel = item.label !== undefined ? item.label : label;
-    const card = sbsRenderPhotoCard(entry, itemLabel);
+  const cards = entries.map((entryWrapper) => {
+    const item = entryWrapper.entry || entryWrapper;
+    const itemLabel = entryWrapper.label !== undefined ? entryWrapper.label : label;
+    const card = sbsRenderPhotoCard(item, itemLabel);
 
-    const estHeight =
-      entry.width && entry.height ? (entry.height / entry.width) * REF_WIDTH : REF_WIDTH;
+    const estHeight = item.width && item.height ? (item.height / item.width) * REF_WIDTH : REF_WIDTH;
 
     let shortest = 0;
     for (let c = 1; c < count; c++) {
@@ -250,88 +270,34 @@ window.addEventListener("resize", () => {
   }, 200);
 });
 
-/* Homepage exclude list — a plain-text file in the repo root. Filenames
-   listed there are skipped from the homepage combined feed only; they
-   still show up normally on their own category page. */
-let SBS_EXCLUDE_CACHE = null;
-
-async function sbsLoadExcludeList() {
-  if (SBS_EXCLUDE_CACHE) return SBS_EXCLUDE_CACHE;
-
-  const cacheKey = "sbs-cache:homepage-exclude.txt";
-  try {
-    const cached = sessionStorage.getItem(cacheKey);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (parsed && typeof parsed.t === "number" && Date.now() - parsed.t < SBS_CACHE_TTL_MS) {
-        SBS_EXCLUDE_CACHE = new Set(parsed.data);
-        return SBS_EXCLUDE_CACHE;
-      }
-    }
-  } catch (e) {
-    /* skip cache on error */
-  }
-
-  try {
-    const url = `https://raw.githubusercontent.com/${SBS_REPO_OWNER}/${SBS_REPO_NAME}/main/homepage-exclude.txt`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      SBS_EXCLUDE_CACHE = new Set();
-      return SBS_EXCLUDE_CACHE;
-    }
-    const text = await res.text();
-    const names = text
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"));
-
-    SBS_EXCLUDE_CACHE = new Set(names);
-    try {
-      sessionStorage.setItem(cacheKey, JSON.stringify({ t: Date.now(), data: names }));
-    } catch (e) {
-      /* skip cache on error */
-    }
-  } catch (e) {
-    SBS_EXCLUDE_CACHE = new Set();
-  }
-
-  return SBS_EXCLUDE_CACHE;
-}
-
-/* Single category (Portraits / Sports / Events pages) */
+/* Single category (Portraits / Sports / Events pages, and client galleries —
+   folderPath "photos/clients/<slug>" maps to manifests/clients/<slug>.json) */
 async function sbsLoadGallery(containerId, folderPath, label) {
   const container = document.getElementById(containerId);
   if (!container) return;
   container.classList.add("is-loading");
 
-  try {
-    const [entries, manifest] = await Promise.all([
-      sbsFetchFolder(folderPath),
-      sbsLoadManifest(folderPath),
-    ]);
-    const images = entries
-      .filter(sbsIsImage)
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((e) => {
-        const dims = manifest.get(e.name);
-        return dims ? { ...e, width: dims.width, height: dims.height } : e;
-      });
+  const category = folderPath.replace(/^photos\//, "");
 
-    if (!images.length) {
-      container.classList.remove("is-loading");
-      container.innerHTML = `<div class="gallery-empty">No photos here yet. Drop images into <code>${folderPath}/</code> on GitHub and they'll show up automatically.</div>`;
+  try {
+    const manifest = await sbsLoadManifest(`manifests/${category}.json`);
+    const items = manifest.map(sbsManifestItemToRenderItem);
+
+    container.classList.remove("is-loading");
+
+    if (!items.length) {
+      container.innerHTML = `<div class="gallery-empty">No photos here yet. Drop images into <code>${folderPath}/</code> on GitHub — they'll appear here automatically after thumbnails finish generating (usually under a minute).</div>`;
       return;
     }
 
-    sbsRenderCards(container, images, label);
-    container.classList.remove("is-loading");
+    sbsRenderCards(container, items, label);
   } catch (err) {
     container.classList.remove("is-loading");
-    container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}). If this keeps happening, GitHub's free API limit may have been hit — it resets within the hour.</div>`;
+    container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}).</div>`;
   }
 }
 
-/* Combined homepage feed — merges several folders, interleaved */
+/* Combined homepage feed — merges several categories, interleaved */
 async function sbsLoadCombinedGallery(containerId, folders) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -343,19 +309,11 @@ async function sbsLoadCombinedGallery(containerId, folders) {
     const perFolder = await Promise.all(
       folders.map(async (f) => {
         try {
-          const [entries, manifest] = await Promise.all([
-            sbsFetchFolder(f.path),
-            sbsLoadManifest(f.path),
-          ]);
-          return entries
-            .filter(sbsIsImage)
+          const category = f.path.replace(/^photos\//, "");
+          const manifest = await sbsLoadManifest(`manifests/${category}.json`);
+          return manifest
             .filter((e) => !excluded.has(e.name))
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .map((e) => {
-              const dims = manifest.get(e.name);
-              const withDims = dims ? { ...e, width: dims.width, height: dims.height } : e;
-              return { entry: withDims, label: f.label };
-            });
+            .map((e) => ({ entry: sbsManifestItemToRenderItem(e), label: f.label }));
         } catch (e) {
           return [];
         }
@@ -370,52 +328,36 @@ async function sbsLoadCombinedGallery(containerId, folders) {
       });
     }
 
+    container.classList.remove("is-loading");
+
     if (!merged.length) {
-      container.classList.remove("is-loading");
       container.innerHTML = `<div class="gallery-empty">No photos yet — add images to the photos/ folders on GitHub and they'll appear here automatically.</div>`;
       return;
     }
 
     sbsRenderCards(container, merged);
-    container.classList.remove("is-loading");
   } catch (err) {
     container.classList.remove("is-loading");
     container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}).</div>`;
   }
 }
 
-/* Client galleries hub — lists every subfolder of photos/clients/ as a card */
+/* Client galleries hub — reads manifests/clients/index.json, one entry
+   per client shoot folder */
 async function sbsLoadClientHub(containerId, basePath) {
   const container = document.getElementById(containerId);
   if (!container) return;
 
   try {
-    const entries = await sbsFetchFolder(basePath);
-    const folders = entries.filter((e) => e.type === "dir");
+    const index = await sbsLoadManifest("manifests/clients/index.json");
 
-    if (!folders.length) {
-      container.innerHTML = `<div class="client-empty">No client galleries yet.<br>Create a folder inside <code>${basePath}/</code> on GitHub — one per shoot — drop the photos in, and it'll show up here automatically.</div>`;
+    if (!index.length) {
+      container.innerHTML = `<div class="client-empty">No client galleries yet.<br>Create a folder inside <code>${basePath}/</code> on GitHub — one per shoot — drop the photos in, and it'll show up here automatically after thumbnails finish generating.</div>`;
       return;
     }
 
-    const cards = await Promise.all(
-      folders.map(async (f) => {
-        let cover = null;
-        let count = 0;
-        try {
-          const inner = await sbsFetchFolder(`${basePath}/${f.name}`);
-          const images = inner.filter(sbsIsImage);
-          count = images.length;
-          cover = images[0] || null;
-        } catch (e) {
-          /* leave as empty cover */
-        }
-        return { slug: f.name, cover, count };
-      })
-    );
-
     container.innerHTML = "";
-    cards.forEach((c) => {
+    index.forEach((c) => {
       const a = document.createElement("a");
       a.className = "client-card";
       a.href = `gallery.html?event=${encodeURIComponent(c.slug)}`;
@@ -424,7 +366,7 @@ async function sbsLoadClientHub(containerId, basePath) {
       thumb.className = `thumb${c.cover ? "" : " is-empty"}`;
       if (c.cover) {
         const img = document.createElement("img");
-        img.src = c.cover.download_url;
+        img.src = sbsRawUrl(c.cover);
         img.alt = `${sbsFormatLabel(c.slug)} cover photo`;
         img.loading = "lazy";
         thumb.appendChild(img);
