@@ -307,6 +307,28 @@ async function sbsLoadGallery(containerId, folderPath, label) {
   }
 }
 
+/* Homepage priority photos — these specific filenames (matched across
+   whichever category they actually live in) appear first on the
+   homepage, in this exact order. Everything else keeps the normal
+   sports/portraits/events interleave after them. Edit this list directly
+   to change which photos lead the homepage, or remove entries to go
+   back to plain interleaving for everyone. */
+const SBS_HOMEPAGE_PRIORITY = [
+  "0001-IMG_4713.webp",
+  "0002-_F2A1700.webp",
+  "0003-IMG_8338.webp",
+  "0004-IMG_6066.webp",
+  "0005-IMG_7500.webp",
+  "0006-IMG_8889.webp",
+  "0007-IMG_5476.webp",
+  "0008-IMG_20981.webp",
+  "0009-fe__1.912.webp",
+  "0010-IMG_3420-2.webp",
+  "0011-_F2A6196.webp",
+  "0012-IMG_5849.webp",
+  "0013-IMG_9846.webp",
+];
+
 /* Combined homepage feed — merges several categories, interleaved */
 async function sbsLoadCombinedGallery(containerId, folders) {
   const container = document.getElementById(containerId);
@@ -330,7 +352,22 @@ async function sbsLoadCombinedGallery(containerId, folders) {
       })
     );
 
-    const merged = [];
+    // Pull priority photos out first, by filename, in the order specified
+    // above — regardless of which category each one actually lives in —
+    // and remove them from their category's list so the interleave below
+    // doesn't also place them a second time.
+    const priorityItems = [];
+    SBS_HOMEPAGE_PRIORITY.forEach((name) => {
+      for (const list of perFolder) {
+        const idx = list.findIndex((it) => it.entry.name === name);
+        if (idx !== -1) {
+          priorityItems.push(list.splice(idx, 1)[0]);
+          break;
+        }
+      }
+    });
+
+    const merged = [...priorityItems];
     const maxLen = Math.max(0, ...perFolder.map((r) => r.length));
     for (let i = 0; i < maxLen; i++) {
       perFolder.forEach((r) => {
