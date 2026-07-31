@@ -152,6 +152,16 @@ function sbsRenderPhotoCard(item, label) {
   card.dataset.full = item.fullUrl; // used by the lightbox — original only loads on click
   card.dataset.caption = label ? `${label} — ${item.name}` : item.name;
 
+  // Reserve the card's real, exact size immediately — before the thumbnail
+  // loads — using the width/height we already have from the manifest.
+  // Without this, an <img> with no src yet has ~0 height, so the whole
+  // gallery collapses to a sliver at first paint and IntersectionObserver
+  // (correctly) reports nearly everything as "in view" no matter what
+  // rootMargin is set to. This is the actual fix for that.
+  if (item.width && item.height) {
+    card.style.aspectRatio = `${item.width} / ${item.height}`;
+  }
+
   const img = document.createElement("img");
   img.dataset.src = item.thumbUrl; // thumbnail — real src assigned by sbsLazyLoadObserver below
   img.alt = label ? `${label} photo by Shots By Skaza` : "Photo by Shots By Skaza";
