@@ -398,8 +398,14 @@ async function sbsLoadClientHub(containerId, basePath) {
   try {
     const index = await sbsLoadManifest("manifests/clients/index.json");
 
+ //   if (!index.length) {
+ //     container.innerHTML = `<div class="client-empty">No client galleries yet.<br>Create a folder inside <code>${basePath}/</code> on GitHub — one per shoot — drop the photos in, and it'll show up here automatically after thumbnails finish generating.</div>`;
+ //    return;
+ //   }
+
+
     if (!index.length) {
-      container.innerHTML = `<div class="client-empty">No client galleries yet.<br>Create a folder inside <code>${basePath}/</code> on GitHub — one per shoot — drop the photos in, and it'll show up here automatically after thumbnails finish generating.</div>`;
+      container.innerHTML = `<div class="client-empty">As more clients purchase photos, Their purchased photos will show up here automatically.</div>`;
       return;
     }
 
