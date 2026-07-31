@@ -184,7 +184,7 @@ const sbsLazyLoadObserver = new IntersectionObserver(
       sbsLazyLoadObserver.unobserve(img);
     });
   },
-  { rootMargin: "600px 0px" }
+  { rootMargin: "150px 0px" }
 );
 
 function sbsFinishContainer(container) {
