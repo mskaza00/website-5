@@ -42,7 +42,7 @@ async function processFolder(photosRel, thumbsRel) {
   const files = fs
     .readdirSync(photosDir)
     .filter((f) => IMAGE_EXT.test(f))
-    .sort((a, b) => a.localeCompare(b));
+   .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
   const manifest = [];
 
