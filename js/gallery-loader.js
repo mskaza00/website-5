@@ -164,7 +164,9 @@ function sbsRenderPhotoCard(item, label) {
 
   const img = document.createElement("img");
   img.dataset.src = item.thumbUrl; // thumbnail — real src assigned by sbsLazyLoadObserver below
-  img.alt = label ? `${label} photo by Shots By Skaza` : "Photo by Shots By Skaza";
+  img.alt = label
+    ? `${label} photography by Matthew Skaza (ShotsBySkaza), Western Massachusetts`
+    : "Photography by Matthew Skaza (ShotsBySkaza), Western Massachusetts";
   card.appendChild(img);
 
   const a = document.createElement("span");
@@ -229,25 +231,36 @@ function sbsBuildColumns(container, count) {
   return cols;
 }
 
-function sbsRenderCards(container, entries, label) {
+function sbsRenderCards(container, entries, label, priorityCount) {
+  priorityCount = priorityCount || 0;
   const count = sbsGetColumnCount();
   const cols = sbsBuildColumns(container, count);
   const colHeights = new Array(count).fill(0);
 
   const REF_WIDTH = 300; // arbitrary reference width — only used to compare relative heights
-  const cards = entries.map((entryWrapper) => {
+  const cards = entries.map((entryWrapper, i) => {
     const item = entryWrapper.entry || entryWrapper;
     const itemLabel = entryWrapper.label !== undefined ? entryWrapper.label : label;
     const card = sbsRenderPhotoCard(item, itemLabel);
 
     const estHeight = item.width && item.height ? (item.height / item.width) * REF_WIDTH : REF_WIDTH;
 
-    let shortest = 0;
-    for (let c = 1; c < count; c++) {
-      if (colHeights[c] < colHeights[shortest]) shortest = c;
+    let targetCol;
+    if (i < priorityCount) {
+      // Priority set: left-to-right, in order, one per column, then cycle —
+      // never reordered by height, so these visibly lead the gallery.
+      targetCol = i % count;
+    } else {
+      // Everyone else: existing shortest-column masonry, continuing on top
+      // of whatever height the priority photos already added.
+      targetCol = 0;
+      for (let c = 1; c < count; c++) {
+        if (colHeights[c] < colHeights[targetCol]) targetCol = c;
+      }
     }
-    cols[shortest].appendChild(card);
-    colHeights[shortest] += estHeight;
+
+    cols[targetCol].appendChild(card);
+    colHeights[targetCol] += estHeight;
 
     return card;
   });
@@ -260,6 +273,7 @@ function sbsRenderCards(container, entries, label) {
   container.dataset.sbsColumns = String(count);
   container._sbsEntries = entries;
   container._sbsLabel = label;
+  container._sbsPriorityCount = priorityCount;
 
   sbsFinishContainer(container);
 }
@@ -275,7 +289,7 @@ window.addEventListener("resize", () => {
     document.querySelectorAll(".masonry[data-sbs-columns]").forEach((container) => {
       if (Number(container.dataset.sbsColumns) === count) return;
       if (!container._sbsEntries) return;
-      sbsRenderCards(container, container._sbsEntries, container._sbsLabel);
+      sbsRenderCards(container, container._sbsEntries, container._sbsLabel, container._sbsPriorityCount);
     });
   }, 200);
 });
@@ -382,7 +396,7 @@ async function sbsLoadCombinedGallery(containerId, folders) {
       return;
     }
 
-    sbsRenderCards(container, merged);
+    sbsRenderCards(container, merged, undefined, priorityItems.length);
   } catch (err) {
     container.classList.remove("is-loading");
     container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}).</div>`;
@@ -398,14 +412,8 @@ async function sbsLoadClientHub(containerId, basePath) {
   try {
     const index = await sbsLoadManifest("manifests/clients/index.json");
 
- //   if (!index.length) {
- //     container.innerHTML = `<div class="client-empty">No client galleries yet.<br>Create a folder inside <code>${basePath}/</code> on GitHub — one per shoot — drop the photos in, and it'll show up here automatically after thumbnails finish generating.</div>`;
- //    return;
- //   }
-
-
     if (!index.length) {
-      container.innerHTML = `<div class="client-empty">As more clients purchase photos, Their purchased photos will show up here automatically.</div>`;
+      container.innerHTML = `<div class="client-empty">No client galleries yet.<br>Create a folder inside <code>${basePath}/</code> on GitHub — one per shoot — drop the photos in, and it'll show up here automatically after thumbnails finish generating.</div>`;
       return;
     }
 
