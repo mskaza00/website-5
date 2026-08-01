@@ -56,6 +56,14 @@
     "aspectRatio": 0.6667
   },
   {
+    "name": "_MG_5514.jpg",
+    "src": "photos/portraits/_MG_5514.jpg",
+    "thumb": "thumbs/portraits/_MG_5514.webp",
+    "width": 3456,
+    "height": 4320,
+    "aspectRatio": 0.8
+  },
+  {
     "name": "_MG_8239.JPG",
     "src": "photos/portraits/_MG_8239.JPG",
     "thumb": "thumbs/portraits/_MG_8239.webp",
@@ -69,6 +77,22 @@
     "thumb": "thumbs/portraits/0F2A1368.webp",
     "width": 3987,
     "height": 5980,
+    "aspectRatio": 0.6667
+  },
+  {
+    "name": "520-_MG_6237.jpg",
+    "src": "photos/portraits/520-_MG_6237.jpg",
+    "thumb": "thumbs/portraits/520-_MG_6237.webp",
+    "width": 3456,
+    "height": 5184,
+    "aspectRatio": 0.6667
+  },
+  {
+    "name": "554-_MG_6271.jpg",
+    "src": "photos/portraits/554-_MG_6271.jpg",
+    "thumb": "thumbs/portraits/554-_MG_6271.webp",
+    "width": 3456,
+    "height": 5184,
     "aspectRatio": 0.6667
   }
 ]
