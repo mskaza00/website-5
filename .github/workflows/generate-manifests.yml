@@ -30,6 +30,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add manifests thumbs
+          git add manifests thumbs sitemap.xml
           git diff --staged --quiet || git commit -m "Auto-update photo manifests and thumbnails"
           git push
