@@ -42,7 +42,7 @@ async function processFolder(photosRel, thumbsRel) {
   const files = fs
     .readdirSync(photosDir)
     .filter((f) => IMAGE_EXT.test(f))
-   .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort((a, b) => a.localeCompare(b));
 
   const manifest = [];
 
@@ -95,10 +95,56 @@ function listClientSlugs() {
     .map((d) => d.name);
 }
 
+const SITE_BASE = "https://shotsbyskaza.com";
+
+function escapeXml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Builds an XML sitemap with Google's <image:image> extension so every
+ *  photo has a direct, crawlable URL — independent of the lazy-loading
+ *  used on the live page (which Google's crawler may not fully trigger
+ *  on a long scrolling gallery). */
+function buildSitemap(categoryManifests) {
+  const pages = [
+    { loc: `${SITE_BASE}/`, images: [] },
+    { loc: `${SITE_BASE}/sports.html`, images: categoryManifests.sports || [] },
+    { loc: `${SITE_BASE}/portraits.html`, images: categoryManifests.portraits || [] },
+    { loc: `${SITE_BASE}/events.html`, images: categoryManifests.events || [] },
+    { loc: `${SITE_BASE}/gallery.html`, images: [] },
+  ];
+
+  let xml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+  xml += `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">\n`;
+
+  for (const page of pages) {
+    xml += `  <url>\n    <loc>${escapeXml(page.loc)}</loc>\n`;
+    for (const item of page.images) {
+      const readableName = item.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
+      const title = `Matthew Skaza Photography (ShotsBySkaza) — ${readableName}`;
+      xml += `    <image:image>\n`;
+      xml += `      <image:loc>${escapeXml(`${SITE_BASE}/${item.src}`)}</image:loc>\n`;
+      xml += `      <image:title>${escapeXml(title)}</image:title>\n`;
+      xml += `    </image:image>\n`;
+    }
+    xml += `  </url>\n`;
+  }
+
+  xml += `</urlset>\n`;
+  return xml;
+}
+
 async function main() {
+  const categoryManifests = {};
+
   for (const category of CATEGORIES) {
     const manifest = await processFolder(`photos/${category}`, `thumbs/${category}`);
     writeJSON(`manifests/${category}.json`, manifest);
+    categoryManifests[category] = manifest;
   }
 
   const clientIndex = [];
@@ -112,6 +158,10 @@ async function main() {
     });
   }
   writeJSON("manifests/clients/index.json", clientIndex);
+
+  const sitemapXml = buildSitemap(categoryManifests);
+  fs.writeFileSync(path.join(ROOT, "sitemap.xml"), sitemapXml);
+  console.log("Wrote sitemap.xml");
 }
 
 main().catch((err) => {
