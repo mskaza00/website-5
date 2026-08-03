@@ -1,7 +1,11 @@
 [
   {
     "slug": "Hailey-Austin Portrait",
+    "title": "Hailey & Austin Couple Portraits",
+    "date": "2026-07-4",
     "count": 2,
-    "cover": "thumbs/clients/Hailey-Austin Portrait/_F2A1165.webp"
+    "cover": "thumbs/clients/Hailey-Austin Portrait/_F2A1165.webp",
+    "locked": true,
+    "passwordHash": "7d389d0f53b2c7fb908a37554478c58d3d0e5999be9f1271051f80b42527b4f0"
   }
 ]
