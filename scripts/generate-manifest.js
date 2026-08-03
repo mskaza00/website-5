@@ -18,6 +18,7 @@
  */
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const sharp = require("sharp");
 
 const ROOT = path.join(__dirname, "..");
@@ -95,6 +96,36 @@ function listClientSlugs() {
     .map((d) => d.name);
 }
 
+function formatSlugLabel(slug) {
+  return slug
+    .replace(/[-_]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function sha256(text) {
+  return crypto.createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/** Reads photos/clients/<slug>/config.json if it exists. Every field is
+ *  optional:
+ *    { "title": "...", "date": "YYYY-MM-DD", "thumbnail": "IMG_1052.webp",
+ *      "locked": true, "password": "plaintext-here" }
+ *  The plaintext password (if any) is hashed below and never written to
+ *  the public manifest — only the hash is. config.json itself still lives
+ *  in the repo, so treat it as "hidden from casual visitors," not truly
+ *  secret — see the README note on this. */
+function readClientConfig(slug) {
+  const configPath = path.join(ROOT, "photos/clients", slug, "config.json");
+  if (!fs.existsSync(configPath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(configPath, "utf8"));
+  } catch (err) {
+    console.warn(`  ! Could not parse config.json for clients/${slug}: ${err.message}`);
+    return {};
+  }
+}
+
 const SITE_BASE = "https://shotsbyskaza.com";
 
 function escapeXml(s) {
@@ -151,10 +182,24 @@ async function main() {
   for (const slug of listClientSlugs()) {
     const manifest = await processFolder(`photos/clients/${slug}`, `thumbs/clients/${slug}`);
     writeJSON(`manifests/clients/${slug}.json`, manifest);
+
+    const config = readClientConfig(slug);
+
+    let cover = manifest.length ? manifest[0].thumb : null;
+    if (config.thumbnail) {
+      const match = manifest.find((m) => m.name === config.thumbnail);
+      if (match) cover = match.thumb;
+      else console.warn(`  ! config.json thumbnail "${config.thumbnail}" not found in clients/${slug}`);
+    }
+
     clientIndex.push({
       slug,
+      title: config.title || formatSlugLabel(slug),
+      date: config.date || null,
       count: manifest.length,
-      cover: manifest.length ? manifest[0].thumb : null,
+      cover,
+      locked: !!config.locked,
+      passwordHash: config.locked && config.password ? sha256(config.password) : null,
     });
   }
   writeJSON("manifests/clients/index.json", clientIndex);
