@@ -403,11 +403,86 @@ async function sbsLoadCombinedGallery(containerId, folders) {
   }
 }
 
+function sbsFormatDate(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
+
+async function sbsSha256(text) {
+  const enc = new TextEncoder().encode(text);
+  const hashBuf = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(hashBuf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/* Shows the password modal (markup lives in gallery.html) for a locked
+   client entry. Resolves true if the correct password was entered (and
+   remembers it in localStorage so this browser isn't asked again), false
+   if the visitor cancels. */
+function sbsPromptPassword(clientEntry) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById("passwordModal");
+    const input = document.getElementById("passwordInput");
+    const form = document.getElementById("passwordForm");
+    const errorEl = document.getElementById("passwordError");
+    const titleEl = document.getElementById("passwordModalTitle");
+    const cancelBtn = document.getElementById("passwordCancel");
+
+    if (!modal || !input || !form || !cancelBtn) {
+      resolve(false);
+      return;
+    }
+
+    const label = clientEntry.title || sbsFormatLabel(clientEntry.slug);
+    if (titleEl) titleEl.textContent = `Enter password for "${label}"`;
+    if (errorEl) errorEl.textContent = "";
+    input.value = "";
+    modal.classList.add("is-open");
+    modal.setAttribute("aria-hidden", "false");
+    input.focus();
+
+    function cleanup(result) {
+      modal.classList.remove("is-open");
+      modal.setAttribute("aria-hidden", "true");
+      form.removeEventListener("submit", onSubmit);
+      cancelBtn.removeEventListener("click", onCancel);
+      resolve(result);
+    }
+
+    async function onSubmit(e) {
+      e.preventDefault();
+      const hash = await sbsSha256(input.value);
+      if (hash === clientEntry.passwordHash) {
+        localStorage.setItem(`sbs-unlocked:${clientEntry.slug}`, "1");
+        cleanup(true);
+      } else {
+        if (errorEl) errorEl.textContent = "Incorrect password — try again.";
+        input.value = "";
+        input.focus();
+      }
+    }
+
+    function onCancel() {
+      cleanup(false);
+    }
+
+    form.addEventListener("submit", onSubmit);
+    cancelBtn.addEventListener("click", onCancel);
+  });
+}
+
 /* Client galleries hub — reads manifests/clients/index.json, one entry
-   per client shoot folder */
+   per client shoot folder. Supports a search box (#clientSearch) and a
+   sort dropdown (#clientSort) if present in the page markup. */
 async function sbsLoadClientHub(containerId, basePath) {
   const container = document.getElementById(containerId);
   if (!container) return;
+
+  const searchInput = document.getElementById("clientSearch");
+  const sortSelect = document.getElementById("clientSort");
 
   try {
     const index = await sbsLoadManifest("manifests/clients/index.json");
@@ -417,49 +492,112 @@ async function sbsLoadClientHub(containerId, basePath) {
       return;
     }
 
-    container.innerHTML = "";
-    index.forEach((c) => {
-      const a = document.createElement("a");
-      a.className = "client-card";
-      a.href = `gallery.html?event=${encodeURIComponent(c.slug)}`;
+    function render() {
+      const query = (searchInput && searchInput.value ? searchInput.value : "").trim().toLowerCase();
+      const sortBy = sortSelect && sortSelect.value ? sortSelect.value : "newest";
 
-      const thumb = document.createElement("div");
-      thumb.className = `thumb${c.cover ? "" : " is-empty"}`;
-      if (c.cover) {
-        const img = document.createElement("img");
-        img.src = sbsRawUrl(c.cover);
-        img.alt = `${sbsFormatLabel(c.slug)} cover photo`;
-        img.loading = "lazy";
-        thumb.appendChild(img);
-      } else {
-        thumb.textContent = "—";
+      let list = index.filter((c) => (c.title || sbsFormatLabel(c.slug)).toLowerCase().includes(query));
+
+      list = list.slice().sort((a, b) => {
+        const titleA = a.title || sbsFormatLabel(a.slug);
+        const titleB = b.title || sbsFormatLabel(b.slug);
+        if (sortBy === "name") return titleA.localeCompare(titleB);
+        const dateA = a.date ? new Date(a.date).getTime() : 0;
+        const dateB = b.date ? new Date(b.date).getTime() : 0;
+        return sortBy === "oldest" ? dateA - dateB : dateB - dateA;
+      });
+
+      container.innerHTML = "";
+
+      if (!list.length) {
+        container.innerHTML = `<div class="client-empty">No galleries match "${query}".</div>`;
+        return;
       }
 
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.innerHTML = `<div class="name">${sbsFormatLabel(c.slug)}</div><div class="count">${c.count} photo${c.count === 1 ? "" : "s"}</div>`;
+      list.forEach((c) => {
+        const title = c.title || sbsFormatLabel(c.slug);
+        const a = document.createElement("a");
+        a.className = "client-card";
+        a.href = `gallery.html?event=${encodeURIComponent(c.slug)}`;
 
-      a.appendChild(thumb);
-      a.appendChild(meta);
-      container.appendChild(a);
-    });
+        const thumb = document.createElement("div");
+        thumb.className = `thumb${c.cover ? "" : " is-empty"}`;
+        if (c.cover) {
+          const img = document.createElement("img");
+          img.src = sbsRawUrl(c.cover);
+          img.alt = `${title} cover photo`;
+          img.loading = "lazy";
+          thumb.appendChild(img);
+        } else {
+          thumb.textContent = "—";
+        }
+        if (c.locked) {
+          const lock = document.createElement("span");
+          lock.className = "client-lock";
+          lock.setAttribute("aria-label", "Password protected");
+          lock.textContent = "🔒";
+          thumb.appendChild(lock);
+        }
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const dateHtml = c.date ? `<div class="date">${sbsFormatDate(c.date)}</div>` : "";
+        meta.innerHTML = `<div class="name">${title}</div>${dateHtml}<div class="count">${c.count} photo${c.count === 1 ? "" : "s"}</div>`;
+
+        a.appendChild(thumb);
+        a.appendChild(meta);
+
+        if (c.locked && !localStorage.getItem(`sbs-unlocked:${c.slug}`)) {
+          a.addEventListener("click", (e) => {
+            e.preventDefault();
+            sbsPromptPassword(c).then((ok) => {
+              if (ok) window.location.href = a.href;
+            });
+          });
+        }
+
+        container.appendChild(a);
+      });
+    }
+
+    render();
+    if (searchInput) searchInput.addEventListener("input", render);
+    if (sortSelect) sortSelect.addEventListener("change", render);
   } catch (err) {
     container.innerHTML = `<div class="gallery-error">Couldn't load client galleries right now (${err.message}).</div>`;
   }
 }
 
-/* Single client gallery detail — photos/clients/<slug>/ */
+/* Single client gallery detail — photos/clients/<slug>/. Locked galleries
+   are gated here too (not just on the hub card), so a direct link can't
+   skip the password prompt. */
 async function sbsLoadClientDetail(containerId, headingId, basePath) {
   const params = new URLSearchParams(window.location.search);
   const slug = params.get("event");
   const heading = document.getElementById(headingId);
+  const container = document.getElementById(containerId);
 
   if (!slug) {
     if (heading) heading.textContent = "Client galleries";
     return { slug: null };
   }
 
-  const label = sbsFormatLabel(slug);
+  const index = await sbsLoadManifest("manifests/clients/index.json");
+  const entry = index.find((c) => c.slug === slug);
+
+  if (entry && entry.locked && !localStorage.getItem(`sbs-unlocked:${slug}`)) {
+    const ok = await sbsPromptPassword(entry);
+    if (!ok) {
+      if (heading) heading.textContent = "Locked gallery";
+      if (container) {
+        container.hidden = false;
+        container.innerHTML = `<div class="gallery-empty">This gallery is password protected. <a href="gallery.html">← Back to client galleries</a></div>`;
+      }
+      return { slug, locked: true };
+    }
+  }
+
+  const label = (entry && entry.title) || sbsFormatLabel(slug);
   if (heading) heading.textContent = label;
   document.title = `${label} | ShotsBySkaza`;
 
