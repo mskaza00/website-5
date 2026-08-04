@@ -419,9 +419,9 @@ async function sbsSha256(text) {
 }
 
 /* Shows the password modal (markup lives in gallery.html) for a locked
-   client entry. Resolves true if the correct password was entered (and
-   remembers it in localStorage so this browser isn't asked again), false
-   if the visitor cancels. */
+   client entry. Resolves true if the correct password was entered, false
+   if the visitor cancels. Nothing is remembered between visits — the
+   password is required again every time, including on a plain reload. */
 function sbsPromptPassword(clientEntry) {
   return new Promise((resolve) => {
     const modal = document.getElementById("passwordModal");
@@ -456,7 +456,6 @@ function sbsPromptPassword(clientEntry) {
       e.preventDefault();
       const hash = await sbsSha256(input.value);
       if (hash === clientEntry.passwordHash) {
-        localStorage.setItem(`sbs-unlocked:${clientEntry.slug}`, "1");
         cleanup(true);
       } else {
         if (errorEl) errorEl.textContent = "Incorrect password — try again.";
@@ -547,7 +546,7 @@ async function sbsLoadClientHub(containerId, basePath) {
         a.appendChild(thumb);
         a.appendChild(meta);
 
-        if (c.locked && !localStorage.getItem(`sbs-unlocked:${c.slug}`)) {
+        if (c.locked) {
           a.addEventListener("click", (e) => {
             e.preventDefault();
             sbsPromptPassword(c).then((ok) => {
@@ -585,7 +584,7 @@ async function sbsLoadClientDetail(containerId, headingId, basePath) {
   const index = await sbsLoadManifest("manifests/clients/index.json");
   const entry = index.find((c) => c.slug === slug);
 
-  if (entry && entry.locked && !localStorage.getItem(`sbs-unlocked:${slug}`)) {
+  if (entry && entry.locked) {
     const ok = await sbsPromptPassword(entry);
     if (!ok) {
       if (heading) heading.textContent = "Locked gallery";
