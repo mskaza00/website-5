@@ -1,19 +1,19 @@
 /* =============================================================
    ShotsBySkaza — photo loader
    Reads pre-generated manifest files (see /manifests) for the photo
-   list, dimensions, thumbnail path, and full-resolution path for each
-   category. Manifests + WebP thumbnails are generated automatically by
-   a GitHub Action (.github/workflows/generate-manifests.yml) every time
-   photos are added or removed — nothing to run by hand.
+   list, dimensions, thumbnail path, and watermarked display path for
+   each category. Manifests + watermarked WebP images are generated
+   automatically by a GitHub Action (.github/workflows/generate-manifests.yml)
+   every time photos are added or removed — nothing to run by hand.
 
    HOW IT WORKS
-   - manifests/<category>.json lists every photo in that category, e.g.
-     manifests/sports.json, manifests/clients/<slug>.json.
-   - manifests/clients/index.json lists every client gallery folder, for
-     the Client Galleries hub page.
-   - The gallery displays each photo's small WebP thumbnail. The
-     lightbox (see main.js) opens the full-resolution original only when
-     a photo is actually clicked.
+   - manifests/<category>.json lists every photo in that category.
+   - manifests/clients/index.json lists every client gallery folder.
+   - The gallery displays each photo's small watermarked WebP thumbnail.
+     The lightbox (see main.js) opens the larger watermarked "display"
+     version — not the true original — when a photo is clicked. Both
+     have the logo baked into the pixel data (not a CSS overlay), so a
+     saved/screenshotted copy keeps the watermark.
    - A photo's real width/height (from the manifest) is used to place it
      into whichever masonry column is currently shortest — true masonry,
      no cropping, no reordering after placement.
@@ -21,10 +21,9 @@
      the viewport (see sbsLazyLoadObserver below).
 
    IF A MANIFEST IS MISSING
-   That just means the Action hasn't generated it yet for that folder
-   (e.g. right after adding a brand-new category or client folder) — the
-   affected gallery shows its normal "no photos yet" empty state rather
-   than an error. It resolves itself on the next push.
+   That just means the Action hasn't generated it yet for that folder —
+   the affected gallery shows its normal "no photos yet" empty state
+   rather than an error. It resolves itself on the next push.
    ============================================================= */
 
 const SBS_REPO_OWNER = "mskaza00";
@@ -41,15 +40,10 @@ function sbsFormatLabel(slug) {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// How long a fetched manifest is trusted before asking GitHub again.
 const SBS_CACHE_TTL_MS = 2 * 60 * 1000;
 
 const SBS_JSON_CACHE = new Map();
 
-/* Fetches and caches any JSON file from the repo (manifests, the client
-   index, etc). Returns [] on a 404 or network error rather than
-   throwing — a missing manifest is a normal, temporary state, not a
-   bug, so callers don't need their own try/catch around this. */
 async function sbsLoadManifest(relPath) {
   if (SBS_JSON_CACHE.has(relPath)) return SBS_JSON_CACHE.get(relPath);
 
@@ -85,9 +79,6 @@ async function sbsLoadManifest(relPath) {
   return data;
 }
 
-/* Homepage exclude list — a plain-text file in the repo root. Filenames
-   listed there are skipped from the homepage combined feed only; they
-   still show up normally on their own category page. */
 let SBS_EXCLUDE_CACHE = null;
 
 async function sbsLoadExcludeList() {
@@ -131,39 +122,34 @@ async function sbsLoadExcludeList() {
   return SBS_EXCLUDE_CACHE;
 }
 
-/* Converts a manifest entry (repo-relative paths) into what the renderer
-   needs (full raw URLs, ready to use as src/href). */
+/* Converts a manifest entry into what the renderer needs. fullUrl now
+   points at the watermarked "display" version, NOT the true original —
+   that's the fix for watermarks surviving a save/screenshot. */
 function sbsManifestItemToRenderItem(entry) {
   return {
     name: entry.name,
     width: entry.width,
     height: entry.height,
-    thumbUrl: sbsRawUrl(entry.thumb || entry.src),
-    fullUrl: sbsRawUrl(entry.src),
+    thumbUrl: sbsRawUrl(entry.thumb || entry.display || entry.src),
+    fullUrl: sbsRawUrl(entry.display || entry.src),
   };
 }
 
 function sbsRenderPhotoCard(item, label) {
   const card = document.createElement("a");
-  card.href = item.fullUrl; // full-resolution original — opens if a visitor middle-clicks/opens in new tab
+  card.href = item.fullUrl;
   card.className = "photo-card";
   card.target = "_blank";
   card.rel = "noopener";
-  card.dataset.full = item.fullUrl; // used by the lightbox — original only loads on click
+  card.dataset.full = item.fullUrl;
   card.dataset.caption = label ? `${label} — ${item.name}` : item.name;
 
-  // Reserve the card's real, exact size immediately — before the thumbnail
-  // loads — using the width/height we already have from the manifest.
-  // Without this, an <img> with no src yet has ~0 height, so the whole
-  // gallery collapses to a sliver at first paint and IntersectionObserver
-  // (correctly) reports nearly everything as "in view" no matter what
-  // rootMargin is set to. This is the actual fix for that.
   if (item.width && item.height) {
     card.style.aspectRatio = `${item.width} / ${item.height}`;
   }
 
   const img = document.createElement("img");
-  img.dataset.src = item.thumbUrl; // thumbnail — real src assigned by sbsLazyLoadObserver below
+  img.dataset.src = item.thumbUrl;
   img.alt = label
     ? `${label} photography by Matthew Skaza (ShotsBySkaza), Western Massachusetts`
     : "Photography by Matthew Skaza (ShotsBySkaza), Western Massachusetts";
@@ -179,11 +165,6 @@ function sbsRenderPhotoCard(item, label) {
   return card;
 }
 
-/* Only assigns the real thumbnail src once an image is genuinely near
-   the viewport. Works safely with the JS-built columns below because
-   each column is plain block flow — no global layout/balance step
-   exists that could be thrown off by images resolving at different
-   times, and thumbnails are small (WebP, ~900px wide) either way. */
 const sbsLazyLoadObserver = new IntersectionObserver(
   (entries) => {
     entries.forEach((entry) => {
@@ -203,14 +184,6 @@ function sbsFinishContainer(container) {
   window.SBS_observeCards && window.SBS_observeCards(container);
   window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
 }
-
-/* ---------------- JS-built masonry columns ----------------
-   Each photo's real (manifest-supplied) height determines which column
-   it's assigned to — always the currently shortest one, exactly like
-   traditional Pinterest-style masonry. Assignment happens once, up
-   front, before any thumbnail has loaded, so a photo can never later
-   jump to a different column or shuffle another photo's position —
-   only the column it's already in can grow. */
 
 function sbsGetColumnCount() {
   const w = window.innerWidth;
@@ -237,7 +210,7 @@ function sbsRenderCards(container, entries, label, priorityCount) {
   const cols = sbsBuildColumns(container, count);
   const colHeights = new Array(count).fill(0);
 
-  const REF_WIDTH = 300; // arbitrary reference width — only used to compare relative heights
+  const REF_WIDTH = 300;
   const cards = entries.map((entryWrapper, i) => {
     const item = entryWrapper.entry || entryWrapper;
     const itemLabel = entryWrapper.label !== undefined ? entryWrapper.label : label;
@@ -247,12 +220,8 @@ function sbsRenderCards(container, entries, label, priorityCount) {
 
     let targetCol;
     if (i < priorityCount) {
-      // Priority set: left-to-right, in order, one per column, then cycle —
-      // never reordered by height, so these visibly lead the gallery.
       targetCol = i % count;
     } else {
-      // Everyone else: existing shortest-column masonry, continuing on top
-      // of whatever height the priority photos already added.
       targetCol = 0;
       for (let c = 1; c < count; c++) {
         if (colHeights[c] < colHeights[targetCol]) targetCol = c;
@@ -278,9 +247,6 @@ function sbsRenderCards(container, entries, label, priorityCount) {
   sbsFinishContainer(container);
 }
 
-// Rebuild columns if the viewport crosses a breakpoint (2/3/4 columns), so
-// photos redistribute cleanly instead of staying stuck at a column count
-// meant for a different screen size.
 let sbsResizeTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(sbsResizeTimer);
@@ -294,8 +260,6 @@ window.addEventListener("resize", () => {
   }, 200);
 });
 
-/* Single category (Portraits / Sports / Events pages, and client galleries —
-   folderPath "photos/clients/<slug>" maps to manifests/clients/<slug>.json) */
 async function sbsLoadGallery(containerId, folderPath, label) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -321,12 +285,6 @@ async function sbsLoadGallery(containerId, folderPath, label) {
   }
 }
 
-/* Homepage priority photos — these specific filenames (matched across
-   whichever category they actually live in) appear first on the
-   homepage, in this exact order. Everything else keeps the normal
-   sports/portraits/events interleave after them. Edit this list directly
-   to change which photos lead the homepage, or remove entries to go
-   back to plain interleaving for everyone. */
 const SBS_HOMEPAGE_PRIORITY = [
   "0001-IMG_4713.webp",
   "0002-_F2A1700.webp",
@@ -343,7 +301,6 @@ const SBS_HOMEPAGE_PRIORITY = [
   "0013-IMG_9846.webp",
 ];
 
-/* Combined homepage feed — merges several categories, interleaved */
 async function sbsLoadCombinedGallery(containerId, folders) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -366,10 +323,6 @@ async function sbsLoadCombinedGallery(containerId, folders) {
       })
     );
 
-    // Pull priority photos out first, by filename, in the order specified
-    // above — regardless of which category each one actually lives in —
-    // and remove them from their category's list so the interleave below
-    // doesn't also place them a second time.
     const priorityItems = [];
     SBS_HOMEPAGE_PRIORITY.forEach((name) => {
       for (const list of perFolder) {
@@ -418,10 +371,6 @@ async function sbsSha256(text) {
     .join("");
 }
 
-/* Shows the password modal (markup lives in gallery.html) for a locked
-   client entry. Resolves true if the correct password was entered, false
-   if the visitor cancels. Nothing is remembered between visits — the
-   password is required again every time, including on a plain reload. */
 function sbsPromptPassword(clientEntry) {
   return new Promise((resolve) => {
     const modal = document.getElementById("passwordModal");
@@ -473,9 +422,6 @@ function sbsPromptPassword(clientEntry) {
   });
 }
 
-/* Client galleries hub — reads manifests/clients/index.json, one entry
-   per client shoot folder. Supports a search box (#clientSearch) and a
-   sort dropdown (#clientSort) if present in the page markup. */
 async function sbsLoadClientHub(containerId, basePath) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -567,9 +513,6 @@ async function sbsLoadClientHub(containerId, basePath) {
   }
 }
 
-/* Single client gallery detail — photos/clients/<slug>/. Locked galleries
-   are gated here too (not just on the hub card), so a direct link can't
-   skip the password prompt. */
 async function sbsLoadClientDetail(containerId, headingId, basePath) {
   const params = new URLSearchParams(window.location.search);
   const slug = params.get("event");
