@@ -1,7 +1,7 @@
 {
   "name": "shotsbyskaza-manifest-tools",
   "private": true,
-  "description": "Generates WebP thumbnails and manifests/ dimension data from the photos/ folders. Not part of the live site itself — the site is still plain HTML/CSS/JS, served as-is from GitHub Pages.",
+  "description": "Generates watermarked WebP thumbnails/display images and manifests/ dimension data from the photos/ folders. Not part of the live site itself — the site is still plain HTML/CSS/JS, served as-is from GitHub Pages.",
   "scripts": {
     "generate-manifest": "node scripts/generate-manifest.js"
   },
