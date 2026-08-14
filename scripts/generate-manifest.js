@@ -1,16 +1,28 @@
 #!/usr/bin/env node
 /**
  * Generates, for every photo category and every client shoot folder:
- *   - manifests/<category>.json        (name, src, thumb, width, height, aspectRatio)
+ *   - manifests/<category>.json        (name, src, thumb, display, width, height, aspectRatio)
  *   - manifests/clients/<slug>.json    (same shape, one per client shoot)
- *   - manifests/clients/index.json     (slug/count/cover for the Client Galleries hub)
- *   - thumbs/<category>/<name>.webp    (auto-generated WebP thumbnails)
- *   - thumbs/clients/<slug>/<name>.webp
+ *   - manifests/clients/index.json     (slug/title/date/count/cover/locked for the hub)
+ *   - thumbs/<category>/<name>.webp    (small watermarked grid thumbnail)
+ *   - display/<category>/<name>.webp   (larger watermarked version — what the
+ *                                        lightbox shows; the true original in
+ *                                        photos/ is never linked from the site)
+ *   - sitemap.xml
+ *
+ * WATERMARKING
+ * Every image the site actually links to (thumb + display) has the logo
+ * composited into it at reduced opacity, baked into the pixel data — not a
+ * CSS overlay. A saved/screenshotted copy keeps the watermark because it's
+ * physically part of the file. The true, un-watermarked original still sits
+ * in photos/<category>/<name> in this repo (not linked from the site), so
+ * if you need this repo to guarantee originals are unreachable by anyone,
+ * that's a separate step: don't commit true originals into a public repo at
+ * all — keep them private and only commit already-processed derivatives.
  *
  * You normally don't need to run this by hand — the GitHub Action in
  * .github/workflows/generate-manifests.yml runs it automatically every
- * time photos are added, removed, or renamed. It's here in case you
- * ever want to run it locally too.
+ * time photos are added, removed, or renamed.
  *
  * Local usage:
  *   npm install
@@ -24,76 +36,17 @@ const sharp = require("sharp");
 const ROOT = path.join(__dirname, "..");
 const CATEGORIES = ["sports", "portraits", "events"];
 const THUMB_MAX_WIDTH = 900;
-const THUMB_QUALITY = 78;
+const DISPLAY_MAX_WIDTH = 2000;
+const IMAGE_QUALITY = 78;
 const IMAGE_EXT = /\.(jpe?g|png|webp|gif)$/i; // note: AVIF isn't supported by sharp's default build in all environments
+
+const SITE_BASE = "https://shotsbyskaza.com";
+const WATERMARK_PATH = path.join(ROOT, "shotsbyskazalogo.png");
+const WATERMARK_OPACITY = 0.5; // 0 (invisible) – 1 (solid)
+const WATERMARK_WIDTH_RATIO = 0.22; // watermark width as a fraction of the photo's width
 
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
-}
-
-/** Reads real dimensions + writes a WebP thumbnail for every image in
- *  photosRel, returning the manifest array for that folder. */
-async function processFolder(photosRel, thumbsRel) {
-  const photosDir = path.join(ROOT, photosRel);
-  if (!fs.existsSync(photosDir)) return [];
-
-  const thumbsDir = path.join(ROOT, thumbsRel);
-  ensureDir(thumbsDir);
-
-  const files = fs
-    .readdirSync(photosDir)
-    .filter((f) => IMAGE_EXT.test(f))
-    .sort((a, b) => a.localeCompare(b));
-
-  const manifest = [];
-
-  for (const file of files) {
-    const srcAbs = path.join(photosDir, file);
-    const baseName = file.replace(/\.[^.]+$/, "");
-    const thumbRel = `${thumbsRel}/${baseName}.webp`;
-    const thumbAbs = path.join(ROOT, thumbRel);
-
-    try {
-      const meta = await sharp(srcAbs).metadata();
-      const width = meta.width;
-      const height = meta.height;
-      if (!width || !height) throw new Error("no dimensions found in file");
-
-      await sharp(srcAbs)
-        .resize({ width: THUMB_MAX_WIDTH, withoutEnlargement: true })
-        .webp({ quality: THUMB_QUALITY })
-        .toFile(thumbAbs);
-
-      manifest.push({
-        name: file,
-        src: `${photosRel}/${file}`,
-        thumb: thumbRel,
-        width,
-        height,
-        aspectRatio: Math.round((width / height) * 10000) / 10000,
-      });
-    } catch (err) {
-      console.warn(`  ! Skipping ${photosRel}/${file}: ${err.message}`);
-    }
-  }
-
-  return manifest;
-}
-
-function writeJSON(relPath, data) {
-  const abs = path.join(ROOT, relPath);
-  ensureDir(path.dirname(abs));
-  fs.writeFileSync(abs, JSON.stringify(data, null, 2) + "\n");
-  console.log(`Wrote ${relPath} (${Array.isArray(data) ? data.length : "n/a"} entries)`);
-}
-
-function listClientSlugs() {
-  const dir = path.join(ROOT, "photos/clients");
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name);
 }
 
 function formatSlugLabel(slug) {
@@ -114,7 +67,7 @@ function sha256(text) {
  *  The plaintext password (if any) is hashed below and never written to
  *  the public manifest — only the hash is. config.json itself still lives
  *  in the repo, so treat it as "hidden from casual visitors," not truly
- *  secret — see the README note on this. */
+ *  secret. */
 function readClientConfig(slug) {
   const configPath = path.join(ROOT, "photos/clients", slug, "config.json");
   if (!fs.existsSync(configPath)) return {};
@@ -126,7 +79,113 @@ function readClientConfig(slug) {
   }
 }
 
-const SITE_BASE = "https://shotsbyskaza.com";
+function listClientSlugs() {
+  const dir = path.join(ROOT, "photos/clients");
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
+}
+
+/** Builds a semi-transparent version of the logo, sized relative to
+ *  targetWidth. Cached per width so we don't redo this for every photo. */
+const watermarkCache = new Map();
+
+async function getWatermark(targetWidth) {
+  const wmWidth = Math.max(40, Math.round(targetWidth * WATERMARK_WIDTH_RATIO));
+  if (watermarkCache.has(wmWidth)) return watermarkCache.get(wmWidth);
+
+  const alpha = Math.round(255 * WATERMARK_OPACITY);
+  const buf = await sharp(WATERMARK_PATH)
+    .resize({ width: wmWidth })
+    .ensureAlpha()
+    .composite([
+      {
+        input: Buffer.from([255, 255, 255, alpha]),
+        raw: { width: 1, height: 1, channels: 4 },
+        tile: true,
+        blend: "dest-in",
+      },
+    ])
+    .png()
+    .toBuffer();
+
+  watermarkCache.set(wmWidth, buf);
+  return buf;
+}
+
+/** Resizes srcAbs to maxWidth, composites the watermark near the bottom
+ *  right, and writes the result as WebP to outAbs. Returns the actual
+ *  output width/height. */
+async function writeWatermarked(srcAbs, outAbs, maxWidth) {
+  const resized = sharp(srcAbs).resize({ width: maxWidth, withoutEnlargement: true });
+  const resizedMeta = await resized.clone().metadata();
+  const outWidth = resizedMeta.width;
+
+  const watermark = await getWatermark(outWidth);
+
+  await resized
+    .composite([{ input: watermark, gravity: "southeast" }])
+    .webp({ quality: IMAGE_QUALITY })
+    .toFile(outAbs);
+}
+
+/** Reads real dimensions, then writes a watermarked thumbnail (thumbs/)
+ *  and a watermarked larger display version (display/) for every image in
+ *  photosRel. Returns the manifest array for that folder. */
+async function processFolder(photosRel, thumbsRel, displayRel) {
+  const photosDir = path.join(ROOT, photosRel);
+  if (!fs.existsSync(photosDir)) return [];
+
+  ensureDir(path.join(ROOT, thumbsRel));
+  ensureDir(path.join(ROOT, displayRel));
+
+  const files = fs
+    .readdirSync(photosDir)
+    .filter((f) => IMAGE_EXT.test(f))
+    .sort((a, b) => a.localeCompare(b));
+
+  const manifest = [];
+
+  for (const file of files) {
+    const srcAbs = path.join(photosDir, file);
+    const baseName = file.replace(/\.[^.]+$/, "");
+    const thumbRel = `${thumbsRel}/${baseName}.webp`;
+    const displayRelPath = `${displayRel}/${baseName}.webp`;
+
+    try {
+      const meta = await sharp(srcAbs).metadata();
+      const width = meta.width;
+      const height = meta.height;
+      if (!width || !height) throw new Error("no dimensions found in file");
+
+      await writeWatermarked(srcAbs, path.join(ROOT, thumbRel), THUMB_MAX_WIDTH);
+      await writeWatermarked(srcAbs, path.join(ROOT, displayRelPath), DISPLAY_MAX_WIDTH);
+
+      manifest.push({
+        name: file,
+        src: `${photosRel}/${file}`, // true original — not linked from the site UI
+        thumb: thumbRel,
+        display: displayRelPath,
+        width,
+        height,
+        aspectRatio: Math.round((width / height) * 10000) / 10000,
+      });
+    } catch (err) {
+      console.warn(`  ! Skipping ${photosRel}/${file}: ${err.message}`);
+    }
+  }
+
+  return manifest;
+}
+
+function writeJSON(relPath, data) {
+  const abs = path.join(ROOT, relPath);
+  ensureDir(path.dirname(abs));
+  fs.writeFileSync(abs, JSON.stringify(data, null, 2) + "\n");
+  console.log(`Wrote ${relPath} (${Array.isArray(data) ? data.length : "n/a"} entries)`);
+}
 
 function escapeXml(s) {
   return String(s)
@@ -136,10 +195,8 @@ function escapeXml(s) {
     .replace(/"/g, "&quot;");
 }
 
-/** Builds an XML sitemap with Google's <image:image> extension so every
- *  photo has a direct, crawlable URL — independent of the lazy-loading
- *  used on the live page (which Google's crawler may not fully trigger
- *  on a long scrolling gallery). */
+/** Builds an XML sitemap with Google's <image:image> extension, pointing
+ *  at the watermarked display versions (what's actually publicly linked). */
 function buildSitemap(categoryManifests) {
   const pages = [
     { loc: `${SITE_BASE}/`, images: [] },
@@ -158,7 +215,7 @@ function buildSitemap(categoryManifests) {
       const readableName = item.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
       const title = `Matthew Skaza Photography (ShotsBySkaza) — ${readableName}`;
       xml += `    <image:image>\n`;
-      xml += `      <image:loc>${escapeXml(`${SITE_BASE}/${item.src}`)}</image:loc>\n`;
+      xml += `      <image:loc>${escapeXml(`${SITE_BASE}/${item.display}`)}</image:loc>\n`;
       xml += `      <image:title>${escapeXml(title)}</image:title>\n`;
       xml += `    </image:image>\n`;
     }
@@ -173,14 +230,18 @@ async function main() {
   const categoryManifests = {};
 
   for (const category of CATEGORIES) {
-    const manifest = await processFolder(`photos/${category}`, `thumbs/${category}`);
+    const manifest = await processFolder(`photos/${category}`, `thumbs/${category}`, `display/${category}`);
     writeJSON(`manifests/${category}.json`, manifest);
     categoryManifests[category] = manifest;
   }
 
   const clientIndex = [];
   for (const slug of listClientSlugs()) {
-    const manifest = await processFolder(`photos/clients/${slug}`, `thumbs/clients/${slug}`);
+    const manifest = await processFolder(
+      `photos/clients/${slug}`,
+      `thumbs/clients/${slug}`,
+      `display/clients/${slug}`
+    );
     writeJSON(`manifests/clients/${slug}.json`, manifest);
 
     const config = readClientConfig(slug);
