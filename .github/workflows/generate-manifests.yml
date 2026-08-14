@@ -26,10 +26,10 @@ jobs:
 
       - run: npm run generate-manifest
 
-      - name: Commit generated manifests and thumbnails
+      - name: Commit generated manifests, thumbnails, and watermarked images
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add manifests thumbs sitemap.xml
-          git diff --staged --quiet || git commit -m "Auto-update photo manifests and thumbnails"
+          git add manifests thumbs display sitemap.xml
+          git diff --staged --quiet || git commit -m "Auto-update photo manifests, thumbnails, and watermarked images"
           git push
