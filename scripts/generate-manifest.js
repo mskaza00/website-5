@@ -42,8 +42,9 @@ const IMAGE_EXT = /\.(jpe?g|png|webp|gif)$/i; // note: AVIF isn't supported by s
 
 const SITE_BASE = "https://shotsbyskaza.com";
 const WATERMARK_PATH = path.join(ROOT, "shotsbyskazalogo.png");
-const WATERMARK_OPACITY = 0.5; // 0 (invisible) – 1 (solid)
-const WATERMARK_WIDTH_RATIO = 0.22; // watermark width as a fraction of the photo's width
+const WATERMARK_OPACITY = 0.45; // 0 (invisible) – 1 (solid)
+const WATERMARK_WIDTH_RATIO = 0.14; // watermark width as a fraction of the photo's width
+const WATERMARK_MARGIN_RATIO = 0.03; // inset from the edge, as a fraction of the photo's width
 
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
@@ -93,12 +94,12 @@ function listClientSlugs() {
 const watermarkCache = new Map();
 
 async function getWatermark(targetWidth) {
-  const wmWidth = Math.max(40, Math.round(targetWidth * WATERMARK_WIDTH_RATIO));
+  const wmWidth = Math.max(30, Math.round(targetWidth * WATERMARK_WIDTH_RATIO));
   if (watermarkCache.has(wmWidth)) return watermarkCache.get(wmWidth);
 
   const alpha = Math.round(255 * WATERMARK_OPACITY);
   const buf = await sharp(WATERMARK_PATH)
-    .resize({ width: wmWidth })
+    .resize({ width: wmWidth, fit: "inside" })
     .ensureAlpha()
     .composite([
       {
@@ -111,22 +112,39 @@ async function getWatermark(targetWidth) {
     .png()
     .toBuffer();
 
-  watermarkCache.set(wmWidth, buf);
-  return buf;
+  // Safety net: confirm the output is actually the size we asked for. If a
+  // future change to this function accidentally produces something huge,
+  // this stops it from ever silently shipping a broken watermark.
+  const meta = await sharp(buf).metadata();
+  if (meta.width > targetWidth * 0.35) {
+    throw new Error(
+      `Watermark came out ${meta.width}px wide against a ${targetWidth}px photo — that's way ` +
+        `bigger than intended, aborting instead of shipping a broken watermark.`
+    );
+  }
+
+  const result = { buf, width: meta.width, height: meta.height };
+  watermarkCache.set(wmWidth, result);
+  return result;
 }
 
-/** Resizes srcAbs to maxWidth, composites the watermark near the bottom
- *  right, and writes the result as WebP to outAbs. Returns the actual
- *  output width/height. */
+/** Resizes srcAbs to maxWidth, composites the watermark inset from the
+ *  bottom-right corner by an explicit margin (never clipped, since the
+ *  position is computed from the watermark's actual measured size), and
+ *  writes the result as WebP to outAbs. */
 async function writeWatermarked(srcAbs, outAbs, maxWidth) {
   const resized = sharp(srcAbs).resize({ width: maxWidth, withoutEnlargement: true });
   const resizedMeta = await resized.clone().metadata();
   const outWidth = resizedMeta.width;
+  const outHeight = resizedMeta.height;
 
   const watermark = await getWatermark(outWidth);
+  const margin = Math.round(outWidth * WATERMARK_MARGIN_RATIO);
+  const left = Math.max(0, outWidth - watermark.width - margin);
+  const top = Math.max(0, outHeight - watermark.height - margin);
 
   await resized
-    .composite([{ input: watermark, gravity: "southeast" }])
+    .composite([{ input: watermark.buf, left, top }])
     .webp({ quality: IMAGE_QUALITY })
     .toFile(outAbs);
 }
