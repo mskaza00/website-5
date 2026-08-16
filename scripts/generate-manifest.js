@@ -90,22 +90,16 @@ function listClientSlugs() {
 }
 
 /** Builds a semi-transparent version of the logo, sized relative to
-const WATERMARK_MAX_HEIGHT_RATIO = 0.18; // watermark height as a fraction of the photo's height
-
-/** Builds a semi-transparent version of the logo, scaled to fit inside a
- *  maxWidth x maxHeight box (whichever dimension is tighter wins) — this
- *  is what guarantees the watermark always fits the photo regardless of
- *  its shape (portrait, landscape, or an ultra-wide panorama). Cached per
- *  box size so we don't redo this for every photo. */
+ *  targetWidth. Cached per width so we don't redo this for every photo. */
 const watermarkCache = new Map();
 
-async function getWatermark(maxWmWidth, maxWmHeight) {
-  const key = `${maxWmWidth}x${maxWmHeight}`;
-  if (watermarkCache.has(key)) return watermarkCache.get(key);
+async function getWatermark(targetWidth) {
+  const wmWidth = Math.max(30, Math.round(targetWidth * WATERMARK_WIDTH_RATIO));
+  if (watermarkCache.has(wmWidth)) return watermarkCache.get(wmWidth);
 
   const alpha = Math.round(255 * WATERMARK_OPACITY);
   const buf = await sharp(WATERMARK_PATH)
-    .resize({ width: maxWmWidth, height: maxWmHeight, fit: "inside" })
+    .resize({ width: wmWidth, fit: "inside" })
     .ensureAlpha()
     .composite([
       {
@@ -118,20 +112,19 @@ async function getWatermark(maxWmWidth, maxWmHeight) {
     .png()
     .toBuffer();
 
+  // Safety net: confirm the output is actually the size we asked for. If a
+  // future change to this function accidentally produces something huge,
+  // this stops it from ever silently shipping a broken watermark.
   const meta = await sharp(buf).metadata();
-
-  // Safety net: fit:"inside" against both bounds should make this
-  // impossible, but confirm anyway rather than silently shipping
-  // something that fails to composite.
-  if (meta.width > maxWmWidth || meta.height > maxWmHeight) {
+  if (meta.width > targetWidth * 0.35) {
     throw new Error(
-      `Watermark came out ${meta.width}x${meta.height} against a ${maxWmWidth}x${maxWmHeight} box — ` +
-        `aborting instead of risking a failed composite.`
+      `Watermark came out ${meta.width}px wide against a ${targetWidth}px photo — that's way ` +
+        `bigger than intended, aborting instead of shipping a broken watermark.`
     );
   }
 
   const result = { buf, width: meta.width, height: meta.height };
-  watermarkCache.set(key, result);
+  watermarkCache.set(wmWidth, result);
   return result;
 }
 
@@ -145,10 +138,7 @@ async function writeWatermarked(srcAbs, outAbs, maxWidth) {
   const outWidth = resizedMeta.width;
   const outHeight = resizedMeta.height;
 
-  const maxWmWidth = Math.max(20, Math.round(outWidth * WATERMARK_WIDTH_RATIO));
-  const maxWmHeight = Math.max(20, Math.round(outHeight * WATERMARK_MAX_HEIGHT_RATIO));
-  const watermark = await getWatermark(maxWmWidth, maxWmHeight);
-
+  const watermark = await getWatermark(outWidth);
   const margin = Math.round(outWidth * WATERMARK_MARGIN_RATIO);
   const left = Math.max(0, outWidth - watermark.width - margin);
   const top = Math.max(0, outHeight - watermark.height - margin);
