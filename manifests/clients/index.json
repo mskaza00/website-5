@@ -3,8 +3,8 @@
     "slug": "Hailey-Austin Portrait",
     "title": "Hailey & Austin Couple Portraits",
     "date": "2026-07-4",
-    "count": 0,
-    "cover": null,
+    "count": 2,
+    "cover": "thumbs/clients/Hailey-Austin Portrait/_F2A1165.webp",
     "locked": true,
     "passwordHash": "7d389d0f53b2c7fb908a37554478c58d3d0e5999be9f1271051f80b42527b4f0"
   },
@@ -12,8 +12,8 @@
     "slug": "Lucas Krok",
     "title": "Lucas Krok 8-2-26",
     "date": "2026-08-2",
-    "count": 0,
-    "cover": null,
+    "count": 14,
+    "cover": "thumbs/clients/Lucas Krok/_F2A3842.webp",
     "locked": true,
     "passwordHash": "39dc7ed31ce8fb1609fa0ba786f935a5552a4f0a76a5ee4b579b2cf55300f2db"
   }

@@ -1,1 +1,20 @@
-[]
+[
+  {
+    "name": "_F2A1165.jpg",
+    "src": "photos/clients/Hailey-Austin Portrait/_F2A1165.jpg",
+    "thumb": "thumbs/clients/Hailey-Austin Portrait/_F2A1165.webp",
+    "display": "display/clients/Hailey-Austin Portrait/_F2A1165.webp",
+    "width": 3165,
+    "height": 4748,
+    "aspectRatio": 0.6666
+  },
+  {
+    "name": "_F2A1276.jpg",
+    "src": "photos/clients/Hailey-Austin Portrait/_F2A1276.jpg",
+    "thumb": "thumbs/clients/Hailey-Austin Portrait/_F2A1276.webp",
+    "display": "display/clients/Hailey-Austin Portrait/_F2A1276.webp",
+    "width": 3745,
+    "height": 5618,
+    "aspectRatio": 0.6666
+  }
+]
