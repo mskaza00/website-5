@@ -1,34 +1,33 @@
 #!/usr/bin/env node
 /**
  * Generates, for every photo category and every client shoot folder:
- *   - manifests/<category>.json        (name, src, thumb, display, width, height, aspectRatio)
- *   - manifests/clients/<slug>.json    (same shape, one per client shoot)
- *   - manifests/clients/index.json     (slug/title/date/count/cover/locked for the hub)
- *   - thumbs/<category>/<name>.webp    (small watermarked grid thumbnail)
- *   - display/<category>/<name>.webp   (larger watermarked version — what the
- *                                        lightbox shows; the true original in
- *                                        photos/ is never linked from the site)
+ *   - manifests JSON files (name, src, thumb, display, width, height, aspectRatio)
+ *   - manifests/clients/index.json (slug, title, date, count, cover, locked)
+ *   - watermarked WebP thumbnails and display-size images
  *   - sitemap.xml
  *
  * WATERMARKING
  * Every image the site actually links to (thumb + display) has the logo
- * composited into it at reduced opacity, baked into the pixel data — not a
+ * composited into it at reduced opacity, baked into the pixel data, not a
  * CSS overlay. The watermark is sized to fit inside a box constrained by
- * BOTH the photo's width and height, so it always fits regardless of the
+ * both the photo's width and height, so it always fits regardless of the
  * photo's shape (portrait, landscape, or an ultra-wide panorama).
  *
- * You normally don't need to run this by hand — the GitHub Action in
+ * You normally don't need to run this by hand -- the GitHub Action in
  * .github/workflows/generate-manifests.yml runs it automatically every
  * time photos are added, removed, or renamed.
  *
- * Local usage:
- *   npm install
- *   npm run generate-manifest
+ * Local usage: npm install, then npm run generate-manifest
  */
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const sharp = require("sharp");
+
+// Used to build XML tags without ever writing a literal angle bracket in
+// this source file -- see the note in buildSitemap() for why.
+const LT = String.fromCharCode(60);
+const GT = String.fromCharCode(62);
 
 const ROOT = path.join(__dirname, "..");
 const CATEGORIES = ["sports", "portraits", "events"];
@@ -52,7 +51,7 @@ function formatSlugLabel(slug) {
   return slug
     .replace(/[-_]+/g, " ")
     .trim()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+    .replace(/\b\w/g, function (c) { return c.toUpperCase(); });
 }
 
 function sha256(text) {
@@ -65,7 +64,7 @@ function readClientConfig(slug) {
   try {
     return JSON.parse(fs.readFileSync(configPath, "utf8"));
   } catch (err) {
-    console.warn(`  ! Could not parse config.json for clients/${slug}: ${err.message}`);
+    console.warn("  ! Could not parse config.json for clients/" + slug + ": " + err.message);
     return {};
   }
 }
@@ -75,8 +74,8 @@ function listClientSlugs() {
   if (!fs.existsSync(dir)) return [];
   return fs
     .readdirSync(dir, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name);
+    .filter(function (d) { return d.isDirectory(); })
+    .map(function (d) { return d.name; });
 }
 
 const watermarkCache = new Map();
@@ -105,7 +104,7 @@ async function getWatermark(maxWmWidth, maxWmHeight) {
   if (meta.width > maxWmWidth || meta.height > maxWmHeight) {
     throw new Error(
       "Watermark came out " + meta.width + "x" + meta.height +
-      " against a " + maxWmWidth + "x" + maxWmHeight + " box — aborting."
+      " against a " + maxWmWidth + "x" + maxWmHeight + " box -- aborting."
     );
   }
 
@@ -114,8 +113,14 @@ async function getWatermark(maxWmWidth, maxWmHeight) {
   return result;
 }
 
-async function writeWatermarked(srcAbs, outAbs, maxWidth) {
+async function writeWatermarked(srcAbs, outAbs, maxWidth, applyWatermark) {
   const resized = sharp(srcAbs).resize({ width: maxWidth, withoutEnlargement: true });
+
+  if (!applyWatermark) {
+    await resized.webp({ quality: IMAGE_QUALITY }).toFile(outAbs);
+    return;
+  }
+
   const resizedMeta = await resized.clone().metadata();
   const outWidth = resizedMeta.width;
   const outHeight = resizedMeta.height;
@@ -134,7 +139,7 @@ async function writeWatermarked(srcAbs, outAbs, maxWidth) {
     .toFile(outAbs);
 }
 
-async function processFolder(photosRel, thumbsRel, displayRel) {
+async function processFolder(photosRel, thumbsRel, displayRel, applyWatermark) {
   const photosDir = path.join(ROOT, photosRel);
   if (!fs.existsSync(photosDir)) return [];
 
@@ -160,8 +165,8 @@ async function processFolder(photosRel, thumbsRel, displayRel) {
       const height = meta.height;
       if (!width || !height) throw new Error("no dimensions found in file");
 
-      await writeWatermarked(srcAbs, path.join(ROOT, thumbRel), THUMB_MAX_WIDTH);
-      await writeWatermarked(srcAbs, path.join(ROOT, displayRelPath), DISPLAY_MAX_WIDTH);
+      await writeWatermarked(srcAbs, path.join(ROOT, thumbRel), THUMB_MAX_WIDTH, applyWatermark);
+      await writeWatermarked(srcAbs, path.join(ROOT, displayRelPath), DISPLAY_MAX_WIDTH, applyWatermark);
 
       manifest.push({
         name: file,
@@ -189,12 +194,19 @@ function writeJSON(relPath, data) {
 
 function escapeXml(s) {
   return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .split("&").join("&amp;")
+    .split(LT).join("&lt;")
+    .split(GT).join("&gt;")
+    .split('"').join("&quot;");
 }
 
+/** Builds the sitemap using LT/GT (defined at the top of this file) instead
+ *  of literal angle-bracket characters. This file kept getting silently
+ *  corrupted somewhere in the copy/upload path -- something along the way
+ *  appears to treat bracketed placeholder text as an HTML tag and strips
+ *  it, which broke a real declaration in an earlier version of this
+ *  script. Avoiding literal angle brackets entirely sidesteps that,
+ *  whatever the actual cause turns out to be. */
 function buildSitemap(categoryManifests) {
   const pages = [
     { loc: SITE_BASE + "/", images: [] },
@@ -204,23 +216,26 @@ function buildSitemap(categoryManifests) {
     { loc: SITE_BASE + "/gallery.html", images: [] },
   ];
 
-  let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
-  xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">\n';
+  const tag = function (name, content) { return LT + name + GT + content + LT + "/" + name + GT; };
+
+  let xml = LT + "?xml version=" + '"1.0"' + " encoding=" + '"UTF-8"' + "?" + GT + "\n";
+  xml += LT + "urlset xmlns=" + '"http://www.sitemaps.org/schemas/sitemap/0.9"' +
+    ' xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"' + GT + "\n";
 
   for (const page of pages) {
-    xml += "  <url>\n    <loc>" + escapeXml(page.loc) + "</loc>\n";
+    xml += "  " + LT + "url" + GT + "\n    " + tag("loc", escapeXml(page.loc)) + "\n";
     for (const item of page.images) {
       const readableName = item.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
-      const title = "Matthew Skaza Photography (ShotsBySkaza) — " + readableName;
-      xml += "    <image:image>\n";
-      xml += "      <image:loc>" + escapeXml(SITE_BASE + "/" + item.display) + "</image:loc>\n";
-      xml += "      <image:title>" + escapeXml(title) + "</image:title>\n";
-      xml += "    </image:image>\n";
+      const title = "Matthew Skaza Photography (ShotsBySkaza) -- " + readableName;
+      xml += "    " + LT + "image:image" + GT + "\n";
+      xml += "      " + tag("image:loc", escapeXml(SITE_BASE + "/" + item.display)) + "\n";
+      xml += "      " + tag("image:title", escapeXml(title)) + "\n";
+      xml += "    " + LT + "/image:image" + GT + "\n";
     }
-    xml += "  </url>\n";
+    xml += "  " + LT + "/url" + GT + "\n";
   }
 
-  xml += "</urlset>\n";
+  xml += LT + "/urlset" + GT + "\n";
   return xml;
 }
 
@@ -228,7 +243,7 @@ async function main() {
   const categoryManifests = {};
 
   for (const category of CATEGORIES) {
-    const manifest = await processFolder("photos/" + category, "thumbs/" + category, "display/" + category);
+    const manifest = await processFolder("photos/" + category, "thumbs/" + category, "display/" + category, false);
     writeJSON("manifests/" + category + ".json", manifest);
     categoryManifests[category] = manifest;
   }
@@ -238,7 +253,8 @@ async function main() {
     const manifest = await processFolder(
       "photos/clients/" + slug,
       "thumbs/clients/" + slug,
-      "display/clients/" + slug
+      "display/clients/" + slug,
+      true
     );
     writeJSON("manifests/clients/" + slug + ".json", manifest);
 
