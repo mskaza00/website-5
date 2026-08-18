@@ -38,8 +38,8 @@ const IMAGE_EXT = /\.(jpe?g|png|webp|gif)$/i;
 
 const SITE_BASE = "https://shotsbyskaza.com";
 const WATERMARK_PATH = path.join(ROOT, "shotsbyskazalogo.png");
-const WATERMARK_OPACITY = 0.45;
-const WATERMARK_WIDTH_RATIO = 0.14;
+const WATERMARK_OPACITY = 0.85; // TEMP: cranked way up for a definitive visibility test — dial back once confirmed
+const WATERMARK_WIDTH_RATIO = 0.32; // TEMP: same — was 0.14
 const WATERMARK_MAX_HEIGHT_RATIO = 0.18;
 const WATERMARK_MARGIN_RATIO = 0.03;
 
