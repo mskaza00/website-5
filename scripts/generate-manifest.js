@@ -38,8 +38,8 @@ const IMAGE_EXT = /\.(jpe?g|png|webp|gif)$/i;
 
 const SITE_BASE = "https://shotsbyskaza.com";
 const WATERMARK_PATH = path.join(ROOT, "shotsbyskazalogo.png");
-const WATERMARK_OPACITY = 0.85; // TEMP: cranked way up for a definitive visibility test — dial back once confirmed
-const WATERMARK_WIDTH_RATIO = 0.32; // TEMP: same — was 0.14
+const WATERMARK_OPACITY = 0.45;
+const WATERMARK_WIDTH_RATIO = 0.14;
 const WATERMARK_MAX_HEIGHT_RATIO = 0.18;
 const WATERMARK_MARGIN_RATIO = 0.03;
 
@@ -84,31 +84,35 @@ async function getWatermark(maxWmWidth, maxWmHeight) {
   const key = maxWmWidth + "x" + maxWmHeight;
   if (watermarkCache.has(key)) return watermarkCache.get(key);
 
-  const alpha = Math.round(255 * WATERMARK_OPACITY);
-  const buf = await sharp(WATERMARK_PATH)
+  // Resize the logo to fit inside the box, then read out its raw RGBA
+  // pixels and directly multiply every pixel's actual alpha value by
+  // WATERMARK_OPACITY. This is plain arithmetic on real pixel data --
+  // no reliance on a blend-mode's documented-but-unverified behavior.
+  const resizedLogo = sharp(WATERMARK_PATH)
     .resize({ width: maxWmWidth, height: maxWmHeight, fit: "inside" })
-    .ensureAlpha()
-    .composite([
-      {
-        input: Buffer.from([255, 255, 255, alpha]),
-        raw: { width: 1, height: 1, channels: 4 },
-        tile: true,
-        blend: "dest-in",
-      },
-    ])
+    .ensureAlpha();
+
+  const raw = await resizedLogo.raw().toBuffer({ resolveWithObject: true });
+  const pixels = raw.data;
+  const width = raw.info.width;
+  const height = raw.info.height;
+
+  for (let i = 3; i < pixels.length; i += 4) {
+    pixels[i] = Math.round(pixels[i] * WATERMARK_OPACITY);
+  }
+
+  const buf = await sharp(pixels, { raw: { width: width, height: height, channels: 4 } })
     .png()
     .toBuffer();
 
-  const meta = await sharp(buf).metadata();
-
-  if (meta.width > maxWmWidth || meta.height > maxWmHeight) {
+  if (width > maxWmWidth || height > maxWmHeight) {
     throw new Error(
-      "Watermark came out " + meta.width + "x" + meta.height +
+      "Watermark came out " + width + "x" + height +
       " against a " + maxWmWidth + "x" + maxWmHeight + " box -- aborting."
     );
   }
 
-  const result = { buf: buf, width: meta.width, height: meta.height };
+  const result = { buf: buf, width: width, height: height };
   watermarkCache.set(key, result);
   return result;
 }
@@ -127,7 +131,20 @@ async function writeWatermarked(srcAbs, outAbs, maxWidth, applyWatermark) {
 
   const maxWmWidth = Math.max(20, Math.round(outWidth * WATERMARK_WIDTH_RATIO));
   const maxWmHeight = Math.max(20, Math.round(outHeight * WATERMARK_MAX_HEIGHT_RATIO));
-  const watermark = await getWatermark(maxWmWidth, maxWmHeight);
+  let watermark = await getWatermark(maxWmWidth, maxWmHeight);
+
+  // Defensive hard clamp: re-resize the watermark against this specific
+  // photo's actual real dimensions right before compositing, so a
+  // rounding quirk from the cached box size can never cause a mismatch.
+  const safeWidth = Math.min(watermark.width, Math.max(1, outWidth - 2));
+  const safeHeight = Math.min(watermark.height, Math.max(1, outHeight - 2));
+  if (safeWidth < watermark.width || safeHeight < watermark.height) {
+    const reclamped = await sharp(watermark.buf)
+      .resize({ width: safeWidth, height: safeHeight, fit: "inside", withoutEnlargement: true })
+      .toBuffer();
+    const reclampedMeta = await sharp(reclamped).metadata();
+    watermark = { buf: reclamped, width: reclampedMeta.width, height: reclampedMeta.height };
+  }
 
   const margin = Math.round(outWidth * WATERMARK_MARGIN_RATIO);
   const left = Math.max(0, outWidth - watermark.width - margin);
