@@ -477,11 +477,40 @@ async function sbsSha256(text) {
     .join("");
 }
 
+/* Once a client gallery's password is entered correctly, remember that
+   for the rest of the browser session (sessionStorage — cleared when the
+   tab/browser closes, but survives page navigations and reloads within
+   it). Keyed by slug + the gallery's current passwordHash, so changing a
+   gallery's password automatically invalidates any old unlock. */
+function sbsUnlockKey(clientEntry) {
+  return `sbs-unlocked:${clientEntry.slug}:${clientEntry.passwordHash}`;
+}
+
+function sbsIsUnlocked(clientEntry) {
+  try {
+    return sessionStorage.getItem(sbsUnlockKey(clientEntry)) === "1";
+  } catch (e) {
+    return false;
+  }
+}
+
+function sbsMarkUnlocked(clientEntry) {
+  try {
+    sessionStorage.setItem(sbsUnlockKey(clientEntry), "1");
+  } catch (e) {
+    /* skip on storage error (e.g. private browsing quota) */
+  }
+}
+
 /* Shows the password modal (markup lives in gallery.html) for a locked
-   client entry. Resolves true if the correct password was entered, false
-   if the visitor cancels. Nothing is remembered between visits — the
-   password is required again every time, including on a plain reload. */
+   client entry. Resolves true if the correct password was entered (or
+   was already unlocked earlier this session), false if the visitor
+   cancels. A correct entry is remembered for the rest of the browser
+   session via sbsMarkUnlocked, so the same gallery won't prompt again
+   until the tab/browser is closed. */
 function sbsPromptPassword(clientEntry) {
+  if (sbsIsUnlocked(clientEntry)) return Promise.resolve(true);
+
   return new Promise((resolve) => {
     const modal = document.getElementById("passwordModal");
     const input = document.getElementById("passwordInput");
@@ -515,6 +544,7 @@ function sbsPromptPassword(clientEntry) {
       e.preventDefault();
       const hash = await sbsSha256(input.value);
       if (hash === clientEntry.passwordHash) {
+        sbsMarkUnlocked(clientEntry);
         cleanup(true);
       } else {
         if (errorEl) errorEl.textContent = "Incorrect password — try again.";
