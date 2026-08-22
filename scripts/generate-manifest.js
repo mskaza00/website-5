@@ -39,9 +39,8 @@ const IMAGE_EXT = /\.(jpe?g|png|webp|gif)$/i;
 const SITE_BASE = "https://shotsbyskaza.com";
 const WATERMARK_PATH = path.join(ROOT, "shotsbyskazalogo.png");
 const WATERMARK_OPACITY = 0.45;
-const WATERMARK_WIDTH_RATIO = 0.14;
-const WATERMARK_MAX_HEIGHT_RATIO = 0.18;
-const WATERMARK_MARGIN_RATIO = 0.03;
+const WATERMARK_WIDTH_RATIO = 0.4;
+const WATERMARK_MAX_HEIGHT_RATIO = 0.4;
 
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
@@ -163,9 +162,12 @@ async function writeWatermarked(srcAbs, outAbs, maxWidth, applyWatermark) {
     watermark = { buf: reclamped, width: reclampedMeta.width, height: reclampedMeta.height };
   }
 
-  const margin = Math.round(outWidth * WATERMARK_MARGIN_RATIO);
-  const left = Math.max(0, outWidth - watermark.width - margin);
-  const top = Math.max(0, outHeight - watermark.height - margin);
+  // Centered, both horizontally and vertically, on the actual resized
+  // canvas — outWidth/outHeight are the real post-resize dimensions (see
+  // the ROOT CAUSE FIX note above), so this stays centered regardless of
+  // the photo's original resolution or aspect ratio.
+  const left = Math.max(0, Math.round((outWidth - watermark.width) / 2));
+  const top = Math.max(0, Math.round((outHeight - watermark.height) / 2));
 
   // Composite onto the ALREADY-RESIZED buffer (not a fresh pipeline off
   // the original file), so there is no chance of compositing the
