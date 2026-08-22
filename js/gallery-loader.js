@@ -25,6 +25,14 @@
    (e.g. right after adding a brand-new category or client folder) — the
    affected gallery shows its normal "no photos yet" empty state rather
    than an error. It resolves itself on the next push.
+
+   ANTI-SAVE DETERRENTS (see sbsInitAntiSave below)
+   These are UX friction, not real protection — the OS screenshot
+   shortcut and screen recording bypass all of them. They stop the
+   casual right-click / long-press / drag-and-drop save and blur the
+   gallery during an app-switch or screen recording so a passive capture
+   is less useful. They do NOT stop a deliberate screenshot, and they do
+   NOT replace watermarking the actual served image files.
    ============================================================= */
 
 const SBS_REPO_OWNER = "mskaza00";
@@ -132,7 +140,12 @@ async function sbsLoadExcludeList() {
 }
 
 /* Converts a manifest entry (repo-relative paths) into what the renderer
-   needs (full raw URLs, ready to use as src/href). */
+   needs (full raw URLs, ready to use as src/href).
+   NOTE: fullUrl currently points at entry.src — the true original file,
+   not a watermarked/downsized "display" copy. Anti-save deterrents below
+   only add friction around the UI; they do nothing to protect this URL
+   itself once someone has it (view-source, DevTools, "Open image in new
+   tab", etc. all still work). */
 function sbsManifestItemToRenderItem(entry) {
   return {
     name: entry.name,
@@ -167,6 +180,10 @@ function sbsRenderPhotoCard(item, label) {
   img.alt = label
     ? `${label} photography by Matthew Skaza (ShotsBySkaza), Western Massachusetts`
     : "Photography by Matthew Skaza (ShotsBySkaza), Western Massachusetts";
+  // Anti-save deterrents (see sbsInitAntiSave): block the browser's
+  // built-in "save image" / "copy image" affordances on the <img> itself.
+  img.draggable = false;
+  img.oncontextmenu = () => false;
   card.appendChild(img);
 
   const a = document.createElement("span");
@@ -203,6 +220,48 @@ function sbsFinishContainer(container) {
   window.SBS_observeCards && window.SBS_observeCards(container);
   window.SBS_registerLightboxGroup && window.SBS_registerLightboxGroup(container);
 }
+
+/* ---------------- Anti-save deterrents ----------------
+   Best-effort friction only — see the note at the top of this file.
+   Initialized once, globally, on first script load. */
+let sbsAntiSaveInitialized = false;
+
+function sbsInitAntiSave() {
+  if (sbsAntiSaveInitialized) return;
+  sbsAntiSaveInitialized = true;
+
+  // Block right-click / long-press context menu anywhere inside a photo
+  // card (covers "Save Image As", "Copy Image", "Open Image in New Tab").
+  // Delegated at the document level so it also covers cards rendered
+  // after this runs (masonry rebuilds on resize, later galleries, etc).
+  document.addEventListener("contextmenu", (e) => {
+    if (e.target.closest(".photo-card")) e.preventDefault();
+  });
+
+  // Block drag-and-drop of the image out of the browser window (a common
+  // way to save an image without going through a menu at all).
+  document.addEventListener("dragstart", (e) => {
+    if (e.target.closest(".photo-card")) e.preventDefault();
+  });
+
+  // Blur galleries while the tab is hidden/backgrounded — covers the
+  // window between starting a screen recording (which backgrounds most
+  // browsers momentarily) or switching apps mid-capture. Does nothing
+  // against a direct screenshot taken while the tab stays foregrounded.
+  document.addEventListener("visibilitychange", () => {
+    document.querySelectorAll(".masonry").forEach((el) => {
+      el.style.filter = document.hidden ? "blur(24px)" : "";
+      el.style.transition = "filter 0.15s ease";
+    });
+  });
+
+  // Prevent "Print to PDF" as a save method.
+  const style = document.createElement("style");
+  style.textContent = "@media print { .masonry, .photo-card { display: none !important; } }";
+  document.head.appendChild(style);
+}
+
+sbsInitAntiSave();
 
 /* ---------------- JS-built masonry columns ----------------
    Each photo's real (manifest-supplied) height determines which column
