@@ -118,16 +118,33 @@ async function getWatermark(maxWmWidth, maxWmHeight) {
 }
 
 async function writeWatermarked(srcAbs, outAbs, maxWidth, applyWatermark) {
-  const resized = sharp(srcAbs).resize({ width: maxWidth, withoutEnlargement: true });
+  // .rotate() with no args auto-applies the EXIF orientation tag (Canon
+  // bodies routinely write orientation 6/8 for portrait shots) and then
+  // strips the tag, so both the pixels AND the reported dimensions below
+  // are in the final, correctly-oriented shape.
+  const resizedPipeline = sharp(srcAbs)
+    .rotate()
+    .resize({ width: maxWidth, withoutEnlargement: true });
 
   if (!applyWatermark) {
-    await resized.webp({ quality: IMAGE_QUALITY }).toFile(outAbs);
+    await resizedPipeline.webp({ quality: IMAGE_QUALITY }).toFile(outAbs);
     return;
   }
 
-  const resizedMeta = await resized.clone().metadata();
-  const outWidth = resizedMeta.width;
-  const outHeight = resizedMeta.height;
+  // ROOT CAUSE FIX: the previous version called `.clone().metadata()` on
+  // the resize pipeline to learn the output size. sharp's .metadata()
+  // always reports the INPUT image's dimensions -- it does not execute
+  // the pipeline, so it never reflects a .resize() call. That mismatch
+  // was the actual bug: watermark sizing was computed against the
+  // original full-resolution photo instead of the resized thumb/display
+  // canvas. toBuffer({ resolveWithObject: true }) actually EXECUTES the
+  // pipeline and returns the real output width/height in `info`, which
+  // is the only reliable way to get post-resize (and post-rotate)
+  // dimensions.
+  const resizedResult = await resizedPipeline.toBuffer({ resolveWithObject: true });
+  const resizedBuf = resizedResult.data;
+  const outWidth = resizedResult.info.width;
+  const outHeight = resizedResult.info.height;
 
   const maxWmWidth = Math.max(20, Math.round(outWidth * WATERMARK_WIDTH_RATIO));
   const maxWmHeight = Math.max(20, Math.round(outHeight * WATERMARK_MAX_HEIGHT_RATIO));
@@ -150,7 +167,10 @@ async function writeWatermarked(srcAbs, outAbs, maxWidth, applyWatermark) {
   const left = Math.max(0, outWidth - watermark.width - margin);
   const top = Math.max(0, outHeight - watermark.height - margin);
 
-  await resized
+  // Composite onto the ALREADY-RESIZED buffer (not a fresh pipeline off
+  // the original file), so there is no chance of compositing the
+  // correctly-sized watermark onto a different, un-resized canvas.
+  await sharp(resizedBuf)
     .composite([{ input: watermark.buf, left: left, top: top }])
     .webp({ quality: IMAGE_QUALITY })
     .toFile(outAbs);
@@ -178,9 +198,21 @@ async function processFolder(photosRel, thumbsRel, displayRel, applyWatermark) {
 
     try {
       const meta = await sharp(srcAbs).metadata();
-      const width = meta.width;
-      const height = meta.height;
+      let width = meta.width;
+      let height = meta.height;
       if (!width || !height) throw new Error("no dimensions found in file");
+
+      // Canon (and most camera) JPEGs commonly carry an EXIF orientation
+      // tag of 6 or 8 for portrait-held shots. sharp's metadata() reports
+      // the raw stored pixel grid, not the visually-correct shape, and
+      // writeWatermarked() above now auto-rotates via .rotate(). Swap
+      // width/height here too so the manifest's aspectRatio (used for
+      // layout) matches the actual output image instead of the raw file.
+      if (meta.orientation && meta.orientation >= 5) {
+        const swap = width;
+        width = height;
+        height = swap;
+      }
 
       await writeWatermarked(srcAbs, path.join(ROOT, thumbRel), THUMB_MAX_WIDTH, applyWatermark);
       await writeWatermarked(srcAbs, path.join(ROOT, displayRelPath), DISPLAY_MAX_WIDTH, applyWatermark);
