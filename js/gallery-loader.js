@@ -156,7 +156,7 @@ function sbsManifestItemToRenderItem(entry) {
   };
 }
 
-function sbsRenderPhotoCard(item, label) {
+function sbsRenderPhotoCard(item, label, selectable) {
   const card = document.createElement("a");
   card.href = item.fullUrl; // full-resolution original — opens if a visitor middle-clicks/opens in new tab
   card.className = "photo-card";
@@ -164,6 +164,7 @@ function sbsRenderPhotoCard(item, label) {
   card.rel = "noopener";
   card.dataset.full = item.fullUrl; // used by the lightbox — original only loads on click
   card.dataset.caption = label ? `${label} — ${item.name}` : item.name;
+  card.sbsItem = item; // used by the multi-select download toolbar below
 
   // Reserve the card's real, exact size immediately — before the thumbnail
   // loads — using the width/height we already have from the manifest.
@@ -185,6 +186,13 @@ function sbsRenderPhotoCard(item, label) {
   img.draggable = false;
   img.oncontextmenu = () => false;
   card.appendChild(img);
+
+  if (selectable) {
+    const check = document.createElement("span");
+    check.className = "select-check";
+    check.setAttribute("aria-hidden", "true");
+    card.appendChild(check);
+  }
 
   const a = document.createElement("span");
   a.className = "corner-a";
@@ -263,6 +271,201 @@ function sbsInitAntiSave() {
 
 sbsInitAntiSave();
 
+/* ---------------- Multi-select + bulk download (client galleries) ----------
+   The right-click/drag blockers above are meant to stop casual, ad-hoc
+   saving — but a real client needs an actual way to get their full-quality
+   photos. This gives them one: a toolbar with a "Select Photos" toggle and
+   a "Download Selected" button that fetches the chosen full-resolution
+   originals (item.fullUrl — the true source file, not the display copy)
+   and bundles them into a single .zip via JSZip, loaded from a CDN on
+   first use rather than bundled, so pages that never touch this feature
+   don't pay for it. Only wired up for client galleries (see
+   sbsLoadClientDetail) — public category pages don't get this toolbar. */
+
+let sbsSelectionInitialized = false;
+
+function sbsInitSelectionHandling() {
+  if (sbsSelectionInitialized) return;
+  sbsSelectionInitialized = true;
+
+  // Capture phase + stopPropagation so this runs (and fully swallows the
+  // click) before the card's own <a href> navigation or any lightbox
+  // click-handler elsewhere on the page gets a chance to act on it.
+  document.addEventListener(
+    "click",
+    (e) => {
+      const container = e.target.closest(".masonry.is-select-mode");
+      if (!container) return;
+      const card = e.target.closest(".photo-card");
+      if (!card || !card.sbsItem) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (!container._sbsSelectedNames) container._sbsSelectedNames = new Set();
+      const name = card.sbsItem.name;
+      if (container._sbsSelectedNames.has(name)) {
+        container._sbsSelectedNames.delete(name);
+        card.classList.remove("is-selected");
+      } else {
+        container._sbsSelectedNames.add(name);
+        card.classList.add("is-selected");
+      }
+      sbsUpdateDownloadToolbar(container);
+    },
+    true
+  );
+}
+
+sbsInitSelectionHandling();
+
+function sbsBuildDownloadToolbar(container) {
+  const toolbar = document.createElement("div");
+  toolbar.className = "gallery-download-toolbar";
+
+  const info = document.createElement("div");
+  info.className = "instructions";
+  info.innerHTML =
+    'Tap <strong>Select Photos</strong>, choose your favorites, then download them in full quality — no screenshots needed.';
+
+  const actions = document.createElement("div");
+  actions.className = "gallery-download-actions";
+
+  const selectBtn = document.createElement("button");
+  selectBtn.type = "button";
+  selectBtn.className = "gallery-select-toggle";
+  selectBtn.textContent = "Select Photos";
+
+  const countEl = document.createElement("span");
+  countEl.className = "selection-count";
+
+  const downloadBtn = document.createElement("button");
+  downloadBtn.type = "button";
+  downloadBtn.className = "gallery-download-btn";
+  downloadBtn.textContent = "Download Selected";
+
+  selectBtn.addEventListener("click", () => {
+    const active = container.classList.toggle("is-select-mode");
+    selectBtn.classList.toggle("is-active", active);
+    selectBtn.textContent = active ? "Cancel" : "Select Photos";
+    if (!active) {
+      container._sbsSelectedNames = new Set();
+      container.querySelectorAll(".photo-card.is-selected").forEach((c) => c.classList.remove("is-selected"));
+    }
+    sbsUpdateDownloadToolbar(container);
+  });
+
+  downloadBtn.addEventListener("click", () => {
+    sbsDownloadSelected(container, downloadBtn);
+  });
+
+  actions.appendChild(selectBtn);
+  actions.appendChild(countEl);
+  actions.appendChild(downloadBtn);
+  toolbar.appendChild(info);
+  toolbar.appendChild(actions);
+
+  container._sbsToolbarEls = { selectBtn, downloadBtn, countEl };
+  return toolbar;
+}
+
+function sbsUpdateDownloadToolbar(container) {
+  const els = container._sbsToolbarEls;
+  if (!els) return;
+  const n = container._sbsSelectedNames ? container._sbsSelectedNames.size : 0;
+  els.countEl.textContent = n ? `${n} selected` : "";
+  els.downloadBtn.classList.toggle("is-enabled", n > 0);
+}
+
+/* Idempotent: safe to call on every render (including masonry rebuilds on
+   resize). Creates the toolbar once, then just re-applies whatever
+   selection state already existed onto the freshly-rendered cards. */
+function sbsSetupSelectMode(container) {
+  const prevSibling = container.previousElementSibling;
+  const hasToolbar = prevSibling && prevSibling.classList && prevSibling.classList.contains("gallery-download-toolbar");
+  if (!hasToolbar) {
+    const toolbar = sbsBuildDownloadToolbar(container);
+    container.parentNode.insertBefore(toolbar, container);
+  }
+
+  const selected = container._sbsSelectedNames || new Set();
+  container.querySelectorAll(".photo-card").forEach((card) => {
+    if (card.sbsItem && selected.has(card.sbsItem.name)) {
+      card.classList.add("is-selected");
+    }
+  });
+
+  sbsUpdateDownloadToolbar(container);
+}
+
+let sbsJSZipPromise = null;
+
+function sbsEnsureJSZip() {
+  if (window.JSZip) return Promise.resolve(window.JSZip);
+  if (sbsJSZipPromise) return sbsJSZipPromise;
+  sbsJSZipPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+    script.onload = () => resolve(window.JSZip);
+    script.onerror = () => reject(new Error("couldn't load the zip library"));
+    document.head.appendChild(script);
+  });
+  return sbsJSZipPromise;
+}
+
+async function sbsDownloadSelected(container, downloadBtn) {
+  const selectedNames = container._sbsSelectedNames;
+  if (!selectedNames || !selectedNames.size) return;
+
+  const items = [];
+  container.querySelectorAll(".photo-card.is-selected").forEach((card) => {
+    if (card.sbsItem) items.push(card.sbsItem);
+  });
+  if (!items.length) return;
+
+  const originalLabel = downloadBtn.textContent;
+  downloadBtn.dataset.busy = "true";
+
+  try {
+    const JSZip = await sbsEnsureJSZip();
+    const zip = new JSZip();
+
+    for (let i = 0; i < items.length; i++) {
+      downloadBtn.textContent = `Preparing ${i + 1}/${items.length}…`;
+      const res = await fetch(items[i].fullUrl);
+      if (!res.ok) throw new Error(`couldn't fetch ${items[i].name}`);
+      const blob = await res.blob();
+      zip.file(items[i].name, blob);
+    }
+
+    downloadBtn.textContent = "Zipping…";
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+
+    const labelSlug = (container._sbsLabel || "gallery").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const url = URL.createObjectURL(zipBlob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${labelSlug}-photos.zip`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  } catch (err) {
+    // Fallback if the zip build fails for any reason (network hiccup, a
+    // browser blocking the cross-origin fetch, etc.): open each selected
+    // photo in its own tab so the visitor can still save manually.
+    alert(
+      "Couldn't build a zip file automatically (" +
+        err.message +
+        "). Opening each photo in a new tab instead — save each one manually."
+    );
+    items.forEach((item) => window.open(item.fullUrl, "_blank", "noopener"));
+  } finally {
+    downloadBtn.removeAttribute("data-busy");
+    downloadBtn.textContent = originalLabel;
+  }
+}
+
 /* ---------------- JS-built masonry columns ----------------
    Each photo's real (manifest-supplied) height determines which column
    it's assigned to — always the currently shortest one, exactly like
@@ -290,8 +493,9 @@ function sbsBuildColumns(container, count) {
   return cols;
 }
 
-function sbsRenderCards(container, entries, label, priorityCount) {
+function sbsRenderCards(container, entries, label, priorityCount, selectable) {
   priorityCount = priorityCount || 0;
+  selectable = !!selectable;
   const count = sbsGetColumnCount();
   const cols = sbsBuildColumns(container, count);
   const colHeights = new Array(count).fill(0);
@@ -300,7 +504,7 @@ function sbsRenderCards(container, entries, label, priorityCount) {
   const cards = entries.map((entryWrapper, i) => {
     const item = entryWrapper.entry || entryWrapper;
     const itemLabel = entryWrapper.label !== undefined ? entryWrapper.label : label;
-    const card = sbsRenderPhotoCard(item, itemLabel);
+    const card = sbsRenderPhotoCard(item, itemLabel, selectable);
 
     const estHeight = item.width && item.height ? (item.height / item.width) * REF_WIDTH : REF_WIDTH;
 
@@ -333,6 +537,9 @@ function sbsRenderCards(container, entries, label, priorityCount) {
   container._sbsEntries = entries;
   container._sbsLabel = label;
   container._sbsPriorityCount = priorityCount;
+  container._sbsSelectable = selectable;
+
+  if (selectable) sbsSetupSelectMode(container);
 
   sbsFinishContainer(container);
 }
@@ -348,14 +555,17 @@ window.addEventListener("resize", () => {
     document.querySelectorAll(".masonry[data-sbs-columns]").forEach((container) => {
       if (Number(container.dataset.sbsColumns) === count) return;
       if (!container._sbsEntries) return;
-      sbsRenderCards(container, container._sbsEntries, container._sbsLabel, container._sbsPriorityCount);
+      sbsRenderCards(container, container._sbsEntries, container._sbsLabel, container._sbsPriorityCount, container._sbsSelectable);
     });
   }, 200);
 });
 
 /* Single category (Portraits / Sports / Events pages, and client galleries —
-   folderPath "photos/clients/<slug>" maps to manifests/clients/<slug>.json) */
-async function sbsLoadGallery(containerId, folderPath, label) {
+   folderPath "photos/clients/<slug>" maps to manifests/clients/<slug>.json).
+   selectable enables the multi-select "Download Selected" toolbar — only
+   passed true from sbsLoadClientDetail, so public category pages never get
+   it. */
+async function sbsLoadGallery(containerId, folderPath, label, selectable) {
   const container = document.getElementById(containerId);
   if (!container) return;
   container.classList.add("is-loading");
@@ -373,7 +583,7 @@ async function sbsLoadGallery(containerId, folderPath, label) {
       return;
     }
 
-    sbsRenderCards(container, items, label);
+    sbsRenderCards(container, items, label, 0, selectable);
   } catch (err) {
     container.classList.remove("is-loading");
     container.innerHTML = `<div class="gallery-error">Couldn't load photos right now (${err.message}).</div>`;
@@ -689,6 +899,6 @@ async function sbsLoadClientDetail(containerId, headingId, basePath) {
   if (heading) heading.textContent = label;
   document.title = `${label} | ShotsBySkaza`;
 
-  await sbsLoadGallery(containerId, `${basePath}/${slug}`, label);
+  await sbsLoadGallery(containerId, `${basePath}/${slug}`, label, true);
   return { slug, label };
 }
