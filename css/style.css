@@ -475,6 +475,135 @@ section { position: relative; z-index: 1; }
 
 .gallery-error { color: #ff9d7a; border-color: rgba(255, 157, 122, 0.35); }
 
+/* ---------------- Client gallery download toolbar ----------------
+   A sanctioned way to actually save photos, sitting right above the
+   masonry grid on client gallery pages (see sbsSetupSelectMode /
+   sbsBuildDownloadToolbar in gallery-loader.js, which injects this
+   markup — nothing to add to the HTML by hand). */
+
+.gallery-download-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 6px 1.4rem;
+  padding: 1rem 1.2rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.gallery-download-toolbar .instructions {
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  color: var(--text-muted);
+  max-width: 46ch;
+}
+
+.gallery-download-toolbar .instructions strong {
+  color: var(--text);
+}
+
+.gallery-download-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-shrink: 0;
+}
+
+.gallery-select-toggle,
+.gallery-download-btn {
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 0.6rem 1.2rem;
+  border-radius: 999px;
+  transition: background 0.2s var(--ease), opacity 0.2s var(--ease), transform 0.2s var(--ease), border-color 0.2s var(--ease), color 0.2s var(--ease);
+  white-space: nowrap;
+}
+
+.gallery-select-toggle {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+}
+
+.gallery-select-toggle:hover { border-color: var(--brand); color: var(--brand-light); }
+
+.gallery-select-toggle.is-active {
+  background: var(--brand-dim);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+.gallery-download-btn {
+  background: var(--brand);
+  color: #fff;
+  opacity: 0.4;
+  pointer-events: none;
+  border: 1px solid transparent;
+}
+
+.gallery-download-btn.is-enabled {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.gallery-download-btn.is-enabled:hover { background: var(--brand-light); transform: translateY(-1px); }
+
+.gallery-download-btn[data-busy="true"] {
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.selection-count {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
+/* Selection checkbox overlay, only present in select mode */
+
+.masonry.is-select-mode .photo-card { cursor: pointer; }
+
+.photo-card .select-check {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(244, 245, 250, 0.75);
+  background: rgba(11, 13, 20, 0.55);
+  backdrop-filter: blur(3px);
+  z-index: 3;
+  opacity: 0;
+  transition: opacity 0.2s var(--ease), background 0.2s var(--ease), border-color 0.2s var(--ease);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  color: #fff;
+}
+
+.masonry.is-select-mode .photo-card .select-check { opacity: 1; }
+
+.photo-card.is-selected .select-check {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.photo-card.is-selected .select-check::after { content: "✓"; }
+
+.photo-card.is-selected img { filter: brightness(0.75); }
+
+@media (max-width: 640px) {
+  .gallery-download-toolbar { flex-direction: column; align-items: stretch; }
+  .gallery-download-actions { justify-content: space-between; }
+}
+
 /* ---------------- Lightbox ---------------- */
 
 .lightbox {
