@@ -421,6 +421,30 @@ function sbsIsMobileDevice() {
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
 }
 
+/* One flaky fetch (a dropped request, a slow edge, a brief blip on
+   raw.githubusercontent.com when several photos get requested back to
+   back) used to fail the ENTIRE batch and dump the visitor into the
+   new-tab fallback — even though a plain retry usually succeeds
+   immediately. Retry each photo a couple of times with a short backoff
+   before actually giving up on it. */
+async function sbsFetchWithRetry(url, attempts) {
+  attempts = attempts || 3;
+  let lastErr;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 async function sbsDownloadSelected(container, downloadBtn) {
   const selectedNames = container._sbsSelectedNames;
   if (!selectedNames || !selectedNames.size) return;
@@ -439,12 +463,13 @@ async function sbsDownloadSelected(container, downloadBtn) {
     // both paths below: the Web Share path requires File[], and building
     // an object URL per photo (rather than linking straight at
     // raw.githubusercontent.com) is what makes the desktop path a true
-    // "download" instead of possibly just navigating to the image.
+    // "download" instead of possibly just navigating to the image. Each
+    // fetch retries a couple of times (see sbsFetchWithRetry) before this
+    // whole thing gives up and falls back to opening new tabs.
     const files = [];
     for (let i = 0; i < items.length; i++) {
       downloadBtn.textContent = `Fetching ${i + 1}/${items.length}…`;
-      const res = await fetch(items[i].fullUrl);
-      if (!res.ok) throw new Error(`couldn't fetch ${items[i].name}`);
+      const res = await sbsFetchWithRetry(items[i].fullUrl, 3);
       const blob = await res.blob();
       files.push(new File([blob], items[i].name, { type: blob.type || "image/webp" }));
     }
