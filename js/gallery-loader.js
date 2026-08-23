@@ -276,11 +276,21 @@ sbsInitAntiSave();
    saving — but a real client needs an actual way to get their full-quality
    photos. This gives them one: a toolbar with a "Select Photos" toggle and
    a "Download Selected" button that fetches the chosen full-resolution
-   originals (item.fullUrl — the true source file, not the display copy)
-   and bundles them into a single .zip via JSZip, loaded from a CDN on
-   first use rather than bundled, so pages that never touch this feature
-   don't pay for it. Only wired up for client galleries (see
-   sbsLoadClientDetail) — public category pages don't get this toolbar. */
+   originals (item.fullUrl — the true source file, not the display copy).
+
+   No zip file — for two different reasons on two different platforms:
+   - On mobile (iOS Safari, Android Chrome), there's no JS API that writes
+     straight into Camera Roll / Photos, zipped or not. The only way a web
+     page gets a photo there is the OS's native share sheet, via
+     navigator.share({ files }) — the visitor taps "Save Image(s)" from
+     the sheet that appears. That's what sbsDownloadSelected does when the
+     browser supports it.
+   - On desktop (Chrome etc., no file-sharing support), each selected
+     photo triggers its own individual file download instead — no zip,
+     no extra unzip step, straight into the normal Downloads folder.
+
+   Only wired up for client galleries (see sbsLoadClientDetail) — public
+   category pages don't get this toolbar. */
 
 let sbsSelectionInitialized = false;
 
@@ -398,21 +408,6 @@ function sbsSetupSelectMode(container) {
   sbsUpdateDownloadToolbar(container);
 }
 
-let sbsJSZipPromise = null;
-
-function sbsEnsureJSZip() {
-  if (window.JSZip) return Promise.resolve(window.JSZip);
-  if (sbsJSZipPromise) return sbsJSZipPromise;
-  sbsJSZipPromise = new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
-    script.onload = () => resolve(window.JSZip);
-    script.onerror = () => reject(new Error("couldn't load the zip library"));
-    document.head.appendChild(script);
-  });
-  return sbsJSZipPromise;
-}
-
 async function sbsDownloadSelected(container, downloadBtn) {
   const selectedNames = container._sbsSelectedNames;
   if (!selectedNames || !selectedNames.size) return;
@@ -427,39 +422,68 @@ async function sbsDownloadSelected(container, downloadBtn) {
   downloadBtn.dataset.busy = "true";
 
   try {
-    const JSZip = await sbsEnsureJSZip();
-    const zip = new JSZip();
-
+    // Fetch every selected photo as a real File object first — needed for
+    // both paths below: the Web Share path requires File[], and building
+    // an object URL per photo (rather than linking straight at
+    // raw.githubusercontent.com) is what makes the desktop path a true
+    // "download" instead of possibly just navigating to the image.
+    const files = [];
     for (let i = 0; i < items.length; i++) {
-      downloadBtn.textContent = `Preparing ${i + 1}/${items.length}…`;
+      downloadBtn.textContent = `Fetching ${i + 1}/${items.length}…`;
       const res = await fetch(items[i].fullUrl);
       if (!res.ok) throw new Error(`couldn't fetch ${items[i].name}`);
       const blob = await res.blob();
-      zip.file(items[i].name, blob);
+      files.push(new File([blob], items[i].name, { type: blob.type || "image/webp" }));
     }
 
-    downloadBtn.textContent = "Zipping…";
-    const zipBlob = await zip.generateAsync({ type: "blob" });
+    let canShareFiles = false;
+    try {
+      canShareFiles = !!(navigator.share && navigator.canShare && navigator.canShare({ files }));
+    } catch (e) {
+      canShareFiles = false;
+    }
 
-    const labelSlug = (container._sbsLabel || "gallery").toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    const url = URL.createObjectURL(zipBlob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${labelSlug}-photos.zip`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    if (canShareFiles) {
+      // Mobile (iOS Safari, Android Chrome, etc.): hand the files to the
+      // OS's native share sheet. This is the only way a web page can put
+      // a photo into Camera Roll / Photos — there is no JS API that
+      // writes there directly. The visitor taps "Save Image(s)" / "Save
+      // to Photos" in the sheet that opens.
+      downloadBtn.textContent = "Opening share sheet…";
+      await navigator.share({ files, title: container._sbsLabel || "Photos" });
+    } else {
+      // Desktop (Chrome etc. — no file-sharing support): download each
+      // selected photo individually, a beat apart so the browser doesn't
+      // treat the burst as popup spam and block the later ones.
+      for (let i = 0; i < files.length; i++) {
+        downloadBtn.textContent = `Downloading ${i + 1}/${files.length}…`;
+        const url = URL.createObjectURL(files[i]);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = files[i].name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        if (i < files.length - 1) await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+    }
   } catch (err) {
-    // Fallback if the zip build fails for any reason (network hiccup, a
-    // browser blocking the cross-origin fetch, etc.): open each selected
-    // photo in its own tab so the visitor can still save manually.
-    alert(
-      "Couldn't build a zip file automatically (" +
-        err.message +
-        "). Opening each photo in a new tab instead — save each one manually."
-    );
-    items.forEach((item) => window.open(item.fullUrl, "_blank", "noopener"));
+    if (err && err.name === "AbortError") {
+      // Visitor backed out of the native share sheet — not worth an alert.
+    } else {
+      // Fallback if fetching/sharing fails for any reason (network hiccup,
+      // a browser blocking the cross-origin fetch, etc.): open each
+      // selected photo in its own tab so the visitor can still save
+      // manually (long-press → Save Image on mobile, right-click → Save
+      // Image As on desktop).
+      alert(
+        "Couldn't download automatically (" +
+          err.message +
+          "). Opening each photo in a new tab instead — save each one manually."
+      );
+      items.forEach((item) => window.open(item.fullUrl, "_blank", "noopener"));
+    }
   } finally {
     downloadBtn.removeAttribute("data-busy");
     downloadBtn.textContent = originalLabel;
