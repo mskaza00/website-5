@@ -87,7 +87,9 @@
 </div>
 
 <script src="js/main.js"></script>
-<script src="js/gallery-loader.js"></script>
+<script>
+  document.write('<scr' + 'ipt src="js/gallery-loader.js?t=' + Date.now() + '"></scr' + 'ipt>');
+</script>
 <script>
 sbsLoadGallery("sports-gallery", "photos/sports", "Sports");
 </script>
