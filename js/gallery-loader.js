@@ -408,6 +408,19 @@ function sbsSetupSelectMode(container) {
   sbsUpdateDownloadToolbar(container);
 }
 
+/* Windows (Edge, Chrome) also implements navigator.canShare/share for
+   files — so canShare alone isn't enough to tell "this is a phone that
+   should get the native Photos/Camera-Roll share sheet" apart from "this
+   is a desktop that happens to support the API too". Gate the share-sheet
+   path on this as well, so desktop always gets plain individual
+   downloads regardless of what the browser claims to support. */
+function sbsIsMobileDevice() {
+  if (navigator.userAgentData && typeof navigator.userAgentData.mobile === "boolean") {
+    return navigator.userAgentData.mobile;
+  }
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+}
+
 async function sbsDownloadSelected(container, downloadBtn) {
   const selectedNames = container._sbsSelectedNames;
   if (!selectedNames || !selectedNames.size) return;
@@ -438,7 +451,12 @@ async function sbsDownloadSelected(container, downloadBtn) {
 
     let canShareFiles = false;
     try {
-      canShareFiles = !!(navigator.share && navigator.canShare && navigator.canShare({ files }));
+      canShareFiles = !!(
+        sbsIsMobileDevice() &&
+        navigator.share &&
+        navigator.canShare &&
+        navigator.canShare({ files })
+      );
     } catch (e) {
       canShareFiles = false;
     }
